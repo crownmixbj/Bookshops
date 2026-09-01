@@ -39,3 +39,10 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# local env
+.env
+.env.local
+
+# offline bundle-verification output
+.verify-export/
