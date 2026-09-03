@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from '../utils/supabase';
+import { DRAFT_STATUS } from '../lib/booklistUpload';
 import {
   MOCK_BOOKLIST_REQUESTS,
-  MOCK_BOOKLIST_ITEMS,
   MOCK_QUOTES,
   MOCK_FEATURED_SHOP,
   MOCK_VENDOR_RATING_DEFAULT,
@@ -29,6 +29,16 @@ import {
  * to demo data so the layout is still workable meanwhile.
  */
 
+/**
+ * The statuses a vendor can see, and therefore the only ones that belong
+ * in "Active Booklist Requests".
+ *
+ * Mirrors vendor_request_queue()'s filter plus 'ordered', which the queue
+ * drops (nothing left to quote) but a buyer still wants on their
+ * dashboard. 'cancelled' is excluded: it is archived, not active.
+ */
+const PUBLISHED_REQUEST_STATUSES = ['pending_quote', 'quoted', 'ordered'];
+
 /** The project ref the client is actually pointed at, for error messages. */
 const PROJECT_REF =
   (process.env.EXPO_PUBLIC_SUPABASE_URL ?? '').match(/https:\/\/([^.]+)\./)?.[1] ??
@@ -38,6 +48,8 @@ const EMPTY = {
   profile: null,
   email: null,
   requests: [],
+  draftCount: 0,
+  items: [],
   quotes: [],
   vendors: [],
   orders: [],
@@ -49,8 +61,12 @@ const EMPTY = {
  *
  * item_breakdown has no schema constraint today, so we are defensive:
  * we accept an array of objects and read the first plausible key for
- * title and price. Anything unparseable yields null and the caller
- * falls back to MOCK_BOOKLIST_ITEMS.
+ * title and price. Anything unparseable yields null.
+ *
+ * This is now the SECOND choice, not the first: a request's own
+ * book_request_items rows are what the buyer actually saved, so they
+ * win. A quote's breakdown is one vendor's reading of that list, and is
+ * only used when the buyer's own lines are missing.
  */
 function parseItemBreakdown(breakdown) {
   if (!Array.isArray(breakdown) || breakdown.length === 0) return null;
@@ -74,6 +90,29 @@ function parseItemBreakdown(breakdown) {
     .filter(Boolean);
 
   return rows.length ? rows : null;
+}
+
+/**
+ * book_request_items rows as the "Active Booklist Requests" card renders
+ * them.
+ *
+ * unit_price stays null rather than becoming 0: a booklist that no
+ * vendor has quoted has no prices, and showing ₦0 against a textbook
+ * reads as free rather than as unpriced. The card checks for null.
+ */
+function mapRequestItems(rows) {
+  return rows.map((row) => ({
+    id: row.id,
+    title: row.title,
+    // Absent entirely on projects that have not run
+    // bookshops_booklist_author.sql — hence ?? null, not a bare read.
+    author: row.author ?? null,
+    unit_price: row.unit_price == null ? null : Number(row.unit_price),
+    quantity: Number(row.quantity) || 1,
+    // TODO(db): no inventory model — in_stock is never real.
+    in_stock: true,
+    checked: true,
+  }));
 }
 
 /** TODO(db): vendors has no rating column. See lib/mockData.js. */
@@ -159,14 +198,89 @@ export function useDashboardData() {
       }
 
       // --- book_requests --------------------------------------------
+      // Published only. A draft is the buyer's private workspace — it
+      // belongs in "Drafts & pending" on the booklists hub, not in a card
+      // headed "Active Booklist Requests", where it would sit next to
+      // lists vendors are actively pricing and read as one of them.
+      //
+      // Filtered in the query rather than after it, so a long backlog of
+      // drafts cannot push published requests past the limit below.
       const { data: requests, error: requestsError } = await supabase
         .from('book_requests')
         .select('id, school_name, class_level, image_url, status, created_at')
         .eq('buyer_id', user.id)
+        .in('status', PUBLISHED_REQUEST_STATUSES)
         .order('created_at', { ascending: false })
         .limit(20);
 
       if (requestsError) throw requestsError;
+
+      // How many drafts are waiting, without fetching them: head + count
+      // returns the number and no rows. Two things need it — the card's
+      // empty state, which would otherwise tell a buyer with three drafts
+      // that they have no booklists, and the demo-data check below, which
+      // must not decide the account is empty when it is only unpublished.
+      const { count: draftCount, error: draftError } = await supabase
+        .from('book_requests')
+        .select('id', { count: 'exact', head: true })
+        .eq('buyer_id', user.id)
+        .eq('status', DRAFT_STATUS);
+
+      // A failed count is cosmetic — it costs a nicer empty state, not
+      // the dashboard. Treat it as zero and carry on.
+      if (draftError) {
+        notes.push({
+          level: 'info',
+          message: `Could not count your drafts: ${draftError.message}`,
+        });
+      }
+
+      // --- book_request_items ---------------------------------------
+      // The line items the buyer saved, read in one query for every
+      // request on screen rather than one query per accordion — a nested
+      // select under book_requests would do the same thing, but this way
+      // a failure names this table instead of failing the whole request
+      // list with it.
+      const itemIds = (requests ?? []).map((r) => r.id);
+      let bookItems = [];
+      if (itemIds.length) {
+        const ITEM_COLUMNS =
+          'id, request_id, title, author, category, quantity, unit_price, parsed, position';
+
+        let { data: itemRows, error: itemsError } = await supabase
+          .from('book_request_items')
+          .select(ITEM_COLUMNS)
+          .in('request_id', itemIds)
+          .order('position', { ascending: true });
+
+        // 42703 = undefined_column. Naming `author` on a project that has
+        // not run bookshops_booklist_author.sql fails the WHOLE select,
+        // which would empty every accordion over one optional field.
+        // Retry without it.
+        if (itemsError?.code === '42703' && /author/i.test(itemsError.message ?? '')) {
+          notes.push({
+            level: 'info',
+            message:
+              'book_request_items has no `author` column yet — run bookshops_booklist_author.sql to show authors.',
+          });
+          ({ data: itemRows, error: itemsError } = await supabase
+            .from('book_request_items')
+            .select(ITEM_COLUMNS.replace(', author', ''))
+            .in('request_id', itemIds)
+            .order('position', { ascending: true }));
+        }
+
+        // Degrade to the quote breakdown rather than killing the page:
+        // the rest of the dashboard does not depend on these rows.
+        if (itemsError) {
+          notes.push({
+            level: 'error',
+            message: `Could not read booklist items: ${itemsError.message}`,
+          });
+        } else {
+          bookItems = itemRows ?? [];
+        }
+      }
 
       // --- quotes ---------------------------------------------------
       // Embedded vendors(...) requires the quotes -> vendors FK, which
@@ -221,6 +335,8 @@ export function useDashboardData() {
         profile: profile ?? null,
         email: user.email ?? null,
         requests: requests ?? [],
+        draftCount: draftError ? 0 : (draftCount ?? 0),
+        items: bookItems,
         quotes,
         orders: orders ?? [],
         vendors: vendors ?? [],
@@ -257,24 +373,37 @@ export function useDashboardData() {
    * substitution sets `demo: true` so the UI can badge it.
    */
   const view = useMemo(() => {
-    const { requests, quotes, vendors, orders, profile, email: authEmail } = data;
-    const isEmpty = requests.length === 0;
+    const { requests, draftCount, items, quotes, vendors, orders, profile, email: authEmail } =
+      data;
+
+    // `requests` now holds published lists only, so a buyer whose whole
+    // account is drafts would look empty and get demo data on top of
+    // their own real work. The draft count is what keeps that honest.
+    const isEmpty = requests.length === 0 && draftCount === 0;
 
     // Active booklist requests, each with its best available line items.
     const activeRequests = isEmpty
       ? MOCK_BOOKLIST_REQUESTS
       : requests.map((r) => {
           const quotesForRequest = quotes.filter((q) => q.request_id === r.id);
+          const saved = mapRequestItems(items.filter((i) => i.request_id === r.id));
           const fromBreakdown = parseItemBreakdown(quotesForRequest[0]?.item_breakdown);
+
+          // The buyer's own saved lines first; a vendor's quote
+          // breakdown only when there are none. An empty array is now a
+          // real answer — the card renders an empty state for it rather
+          // than filling the gap with invented titles.
+          const lineItems = saved.length ? saved : (fromBreakdown ?? []);
+
           return {
             ...r,
             vendor_name:
               quotesForRequest[0]?.vendors?.store_name ??
               r.school_name ??
               'Awaiting vendor',
-            // TODO(db): book_request_items table. See lib/mockData.js.
-            items: fromBreakdown ?? MOCK_BOOKLIST_ITEMS,
-            itemsAreReal: Boolean(fromBreakdown),
+            items: lineItems,
+            /** 'saved' | 'quote' | 'none' — what the card is showing. */
+            itemsSource: saved.length ? 'saved' : fromBreakdown ? 'quote' : 'none',
             quoteCount: quotesForRequest.length,
           };
         });
@@ -311,6 +440,8 @@ export function useDashboardData() {
         authEmail?.split('@')[0] ||
         'there',
       activeRequests,
+      /** Drafts, which this card deliberately does not show. */
+      draftCount,
       pendingQuotes,
       featuredShop,
       vendors,
@@ -325,6 +456,8 @@ export function useDashboardData() {
        */
       isEmptyProject:
         isEmpty && quotes.length === 0 && vendors.length === 0,
+      /** True when the only thing this buyer has is unpublished drafts. */
+      hasOnlyDrafts: requests.length === 0 && draftCount > 0,
     };
   }, [data]);
 

@@ -165,6 +165,7 @@ export function useSettings() {
     email,
     emailVerified,
     isVendor: profile?.role === 'vendor',
+    isAdmin: profile?.role === 'admin',
     loading,
     error,
     reload: load,

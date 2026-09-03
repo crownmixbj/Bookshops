@@ -45,4 +45,4 @@ yarn-error.*
 .env.local
 
 # offline bundle-verification output
-.verify-export/
+.verify-*

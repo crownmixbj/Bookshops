@@ -12,22 +12,48 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, radius, font, shadow } from '../../theme';
 import { useLayout } from '../../hooks/useLayout';
 
+/**
+ * Where a vendor nav item goes. A union rather than `string`, so a link
+ * to a screen that does not exist fails to compile instead of landing on
+ * Expo Router's "Unmatched Route".
+ *
+ * Dashboard points at `/vendor`, the real request-queue screen, rather
+ * than a `/vendor/dashboard` placeholder — there is no sense shipping an
+ * empty page in front of the one screen that is actually built.
+ *
+ * Settings points at the shared `/settings`, which already branches on
+ * role. A second vendor-only settings screen would be two places to
+ * change the same preference.
+ */
+export type VendorRoute =
+  | '/vendor'
+  | '/vendor/booklists'
+  | '/vendor/orders'
+  | '/vendor/customers'
+  | '/vendor/messaging'
+  | '/vendor/analytics'
+  | '/vendor/payouts'
+  | '/settings';
+
 export interface VendorNavItem {
   key: string;
   label: string;
   icon: keyof typeof Ionicons.glyphMap;
+  /** null for Logout, which is an action rather than a destination. */
+  route: VendorRoute | null;
   badge?: number;
 }
 
 export const VENDOR_NAV: VendorNavItem[] = [
-  { key: 'dashboard', label: 'Dashboard', icon: 'home-outline' },
-  { key: 'booklists', label: 'My Booklists', icon: 'bookmark-outline' },
-  { key: 'orders', label: 'Orders', icon: 'receipt-outline' },
-  { key: 'customers', label: 'Customers', icon: 'people-outline' },
-  { key: 'messaging', label: 'Messaging', icon: 'chatbubble-outline' },
-  { key: 'analytics', label: 'Analytics', icon: 'bar-chart-outline' },
-  { key: 'settings', label: 'Settings', icon: 'settings-outline' },
-  { key: 'logout', label: 'Logout', icon: 'log-out-outline' },
+  { key: 'dashboard', label: 'Dashboard', icon: 'home-outline', route: '/vendor' },
+  { key: 'booklists', label: 'My Booklists', icon: 'bookmark-outline', route: '/vendor/booklists' },
+  { key: 'orders', label: 'Orders', icon: 'receipt-outline', route: '/vendor/orders' },
+  { key: 'customers', label: 'Customers', icon: 'people-outline', route: '/vendor/customers' },
+  { key: 'messaging', label: 'Messaging', icon: 'chatbubble-outline', route: '/vendor/messaging' },
+  { key: 'analytics', label: 'Analytics', icon: 'bar-chart-outline', route: '/vendor/analytics' },
+  { key: 'payouts', label: 'Payouts', icon: 'wallet-outline', route: '/vendor/payouts' },
+  { key: 'settings', label: 'Settings', icon: 'settings-outline', route: '/settings' },
+  { key: 'logout', label: 'Logout', icon: 'log-out-outline', route: null },
 ];
 
 /**

@@ -53,6 +53,11 @@ export function Field({
       <TextInput
         style={[styles.input, !!error && styles.inputError]}
         placeholderTextColor={colors.textFaint}
+        // The visible <Text> above is not tied to the input, so without
+        // this a screen reader reaches the field and announces nothing.
+        // Spread last so a caller can still override it.
+        accessibilityLabel={label}
+        accessibilityHint={error ?? hint}
         {...input}
       />
       {!!error ? (

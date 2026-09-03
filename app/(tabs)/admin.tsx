@@ -11,12 +11,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 
-import {
-  AdminTopBar,
-  AdminSidebar,
-  Panel,
-  type AdminNavItem,
-} from '../../components/admin/AdminShell';
+import { Panel } from '../../components/admin/AdminShell';
 import { MetricCard } from '../../components/admin/Sparkline';
 import {
   useAdminDashboard,
@@ -28,6 +23,8 @@ import { useLayout } from '../../hooks/useLayout';
 import { supabase } from '../../utils/supabase';
 import { colors, spacing, radius, font, formatNaira } from '../../theme';
 import type { ContentReport, Vendor } from '../../types/db';
+import { Footer } from '../../components/layout/Footer';
+import { useShell } from '../../components/layout/ShellContext';
 
 function timeAgo(iso: string): string {
   const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
@@ -83,8 +80,9 @@ function IconBtn({
 
 export default function AdminDashboardScreen() {
   const { isMobile, isDesktop, contentPadding, width } = useLayout();
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [search, setSearch] = useState('');
+  // The search box lives in the shell's top bar so its text survives
+  // navigation; this screen just reads what was typed.
+  const { search } = useShell();
 
   const {
     isAdmin,
@@ -107,15 +105,6 @@ export default function AdminDashboardScreen() {
 
   const metrics = useAdminMetrics(stats);
 
-  async function handleNavigate(item: AdminNavItem) {
-    if (item.key === 'logout') {
-      await supabase.auth.signOut();
-      return;
-    }
-    if (item.key === 'settings') router.push('/settings');
-    // The other admin sections have no screens yet, so they stay inert
-    // rather than routing to expo-router's "Unmatched Route".
-  }
 
   const q = search.trim().toLowerCase();
   const visibleUsers = useMemo(
@@ -163,27 +152,7 @@ export default function AdminDashboardScreen() {
     : (contentWidth - spacing.md) / 2;
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
-      <AdminTopBar
-        adminName={users.find((u) => u.role === 'admin')?.full_name?.split(' ')[0] ?? 'Admin'}
-        query={search}
-        onQueryChange={setSearch}
-        onMenuPress={() => setDrawerOpen(true)}
-        onProfilePress={() => router.push('/settings')}
-        alerts={(stats?.pending.vendor_approvals ?? 0) + (stats?.pending.open_reports ?? 0)}
-      />
-
-      <View style={styles.body}>
-        <AdminSidebar
-          activeKey="dashboard"
-          badges={{
-            vendors: stats?.pending.vendor_approvals ?? 0,
-            support: stats?.pending.open_reports ?? 0,
-          }}
-          onNavigate={handleNavigate}
-          drawerOpen={drawerOpen}
-          onCloseDrawer={() => setDrawerOpen(false)}
-        />
+    <>
 
         <ScrollView
           style={styles.scroll}
@@ -456,9 +425,9 @@ export default function AdminDashboardScreen() {
               </View>
             </>
           )}
+          <Footer audience="admin" />
         </ScrollView>
-      </View>
-    </SafeAreaView>
+    </>
   );
 }
 

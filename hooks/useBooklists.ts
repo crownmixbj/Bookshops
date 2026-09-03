@@ -43,11 +43,15 @@ const EMPTY: RawState = { requests: [], items: [], quotes: [], orders: [] };
 /**
  * Which section a request belongs in.
  *   archived  finished or abandoned — nothing left to do
- *   draft     raised but no vendor has quoted it yet
+ *   draft     still being edited, or published with no quote back yet
  *   active    quoted or ordered — awaiting a decision or a delivery
  */
 function bucketFor(request: BookRequest, quotes: Quote[], order: Order | null): BooklistBucket {
   if (request.status === 'cancelled') return 'archived';
+  // Explicit rather than falling through to the no-live-quotes branch
+  // below: a draft has no quotes by construction, and saying so here is
+  // what makes "Drafts & pending" mean something.
+  if (request.status === 'draft') return 'draft';
   if (order && (order.fulfillment_status === 'delivered' || order.fulfillment_status === 'cancelled')) {
     return 'archived';
   }
@@ -112,6 +116,9 @@ export function useBooklists() {
       const [itemsRes, quotesRes, ordersRes] = await Promise.all([
         supabase
           .from('book_request_items')
+          // TODO: add `author` here once bookshops_booklist_author.sql has
+          // been run. Naming a column that does not exist fails the whole
+          // select, which would blank the page rather than hide one field.
           .select('id, request_id, title, category, quantity, unit_price, parsed, position, created_at, updated_at')
           .in('request_id', ids)
           .order('position', { ascending: true }),
@@ -197,6 +204,7 @@ export function useBooklists() {
         order,
         bucket: bucketFor(request, myQuotes, order),
         itemCount: myItems.reduce((n, i) => n + i.quantity, 0),
+        lineCount: myItems.length,
         estimatedTotal,
         totalSource,
         hasUnpricedItems: myItems.some((i) => i.unit_price == null),

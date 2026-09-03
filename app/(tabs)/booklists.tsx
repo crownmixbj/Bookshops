@@ -12,19 +12,43 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 
-import { TopBar } from '../../components/dashboard/TopBar';
-import { Sidebar, NAV_ITEMS } from '../../components/dashboard/Sidebar';
-import { ProfileMenu } from '../../components/profile/ProfileMenu';
-import { SupportMenu } from '../../components/support/SupportMenu';
-import { SupportDrawer } from '../../components/support/SupportDrawer';
 import { BooklistCard } from '../../components/booklists/BooklistCard';
 import { CreateBooklistModal } from '../../components/booklists/CreateBooklistModal';
+import { CreateSourceSheet, type BooklistSource } from '../../components/booklists/CreateSourceSheet';
+import { BooklistReviewModal } from '../../components/booklists/BooklistReviewModal';
+import { EditBooklistModal } from '../../components/booklists/EditBooklistModal';
+import { ConfirmDialog } from '../../components/booklists/ConfirmDialog';
+import {
+  pickBooklistImage,
+  publishBookRequest,
+  deleteBookRequest,
+  describeBooklistError,
+  type PickedImage,
+} from '../../lib/booklistUpload';
 
 import { useLayout } from '../../hooks/useLayout';
 import { useBooklists } from '../../hooks/useBooklists';
 import { supabase } from '../../utils/supabase';
 import { colors, spacing, radius, font, shadow } from '../../theme';
 import type { Booklist } from '../../types/db';
+import { Footer } from '../../components/layout/Footer';
+import { useShell } from '../../components/layout/ShellContext';
+
+/**
+ * Edit / Publish / Delete, threaded down to every card in a section.
+ *
+ * Grouped into one object rather than three props because they always
+ * travel together, and because the card decides for itself which of
+ * them apply — a delivered booklist gets the same handlers and shows
+ * none of the buttons.
+ */
+interface CardActions {
+  onEdit: (booklist: Booklist) => void;
+  onPublish: (booklist: Booklist) => void;
+  onDelete: (booklist: Booklist) => void;
+  /** Id of the booklist whose Publish is in flight, if any. */
+  publishingId: string | null;
+}
 
 interface SectionProps {
   title: string;
@@ -34,6 +58,7 @@ interface SectionProps {
   emptyText: string;
   defaultExpanded?: boolean;
   collapsible?: boolean;
+  actions: CardActions;
 }
 
 function Section({
@@ -44,6 +69,7 @@ function Section({
   emptyText,
   defaultExpanded = false,
   collapsible = false,
+  actions,
 }: SectionProps) {
   // Archived history is collapsed by default — it grows without bound and
   // is the least useful thing on the page day to day.
@@ -85,6 +111,10 @@ function Section({
               booklist={b}
               defaultExpanded={defaultExpanded && i === 0}
               onPressQuotes={() => router.push('/')}
+              onEdit={actions.onEdit}
+              onPublish={actions.onPublish}
+              onDelete={actions.onDelete}
+              publishing={actions.publishingId === b.id}
             />
           ))
         ))}
@@ -102,14 +132,107 @@ function Section({
  */
 export default function BooklistsScreen() {
   const { isMobile, contentPadding } = useLayout();
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [profileOpen, setProfileOpen] = useState(false);
-  const [supportOpen, setSupportOpen] = useState(false);
-  const [chatOpen, setChatOpen] = useState(false);
+  // Three steps, three pieces of state: choose a source, hand a photo to
+  // the review modal, or fall back to typing it in.
+  const [choosing, setChoosing] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [search, setSearch] = useState('');
+  const [reviewImage, setReviewImage] = useState<PickedImage | null>(null);
+  const [flash, setFlash] = useState<string | null>(null);
+  const [pickError, setPickError] = useState<string | null>(null);
+
+  // Edit / publish / delete on an existing list.
+  const [editing, setEditing] = useState<Booklist | null>(null);
+  const [deleting, setDeleting] = useState<Booklist | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [publishingId, setPublishingId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  // The search box lives in the shell's top bar so its text survives
+  // navigation; this screen just reads what was typed.
+  const { search } = useShell();
 
   const { sections, userId, loading, refreshing, error, refresh, reload } = useBooklists();
+
+  /**
+   * What the buyer picked in the action sheet.
+   *
+   * The sheet is dismissed BEFORE the picker is launched. On iOS a
+   * native image picker presented from underneath an open Modal is
+   * simply never shown — no error, no camera, nothing — so the order
+   * here is load-bearing, not cosmetic.
+   */
+  async function handleSource(source: BooklistSource) {
+    setChoosing(false);
+    setPickError(null);
+
+    if (source === 'manual') {
+      setReviewImage(null);
+      setCreating(true);
+      return;
+    }
+
+    try {
+      const picked = await pickBooklistImage(source);
+      // Null covers both a cancel and a declined permission. A cancel
+      // should leave the buyer where they were; a refusal needs a word,
+      // but pickBooklistImage cannot tell us which happened, so this
+      // stays silent and the button is still there to press.
+      if (!picked) return;
+      setReviewImage(picked);
+    } catch (e) {
+      setPickError((e as Error).message);
+    }
+  }
+
+  /** Shown after a booklist is created or changed, once its modal has closed. */
+  async function handleSubmitted(message: string) {
+    setFlash(message);
+    setActionError(null);
+    await reload();
+  }
+
+  /**
+   * Draft -> pending_quote, which is what puts the list in front of
+   * vendors. publishBookRequest refuses an empty list and checks that a
+   * row was actually updated, so a policy refusal surfaces here as a
+   * message rather than as a button that appears to work.
+   */
+  async function handlePublish(booklist: Booklist) {
+    setPublishingId(booklist.id);
+    setActionError(null);
+    try {
+      await publishBookRequest(booklist.id);
+      setFlash(`${booklist.school_name} is now with vendors. Quotes will appear here.`);
+      await reload();
+    } catch (e) {
+      setActionError(describeBooklistError(e));
+    } finally {
+      setPublishingId(null);
+    }
+  }
+
+  async function handleDelete() {
+    if (!deleting) return;
+    setDeleteBusy(true);
+    setActionError(null);
+    try {
+      await deleteBookRequest(deleting.id);
+      setFlash(`Deleted the booklist for ${deleting.school_name}.`);
+      setDeleting(null);
+      await reload();
+    } catch (e) {
+      setActionError(describeBooklistError(e));
+      setDeleting(null);
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
+
+  const cardActions: CardActions = {
+    onEdit: setEditing,
+    onPublish: handlePublish,
+    onDelete: setDeleting,
+    publishingId,
+  };
 
   /**
    * Only these routes exist as files today. The sidebar also lists My
@@ -120,14 +243,6 @@ export default function BooklistsScreen() {
    */
   const IMPLEMENTED = { dashboard: '/', booklists: '/booklists', orders: '/orders', saved: '/saved', settings: '/settings' } as const;
 
-  async function handleNavigate(item: (typeof NAV_ITEMS)[number]) {
-    if (item.key === 'logout') {
-      await supabase.auth.signOut();
-      return;
-    }
-    const target = IMPLEMENTED[item.key as keyof typeof IMPLEMENTED];
-    if (target && target !== '/booklists') router.push(target);
-  }
 
   const q = search.trim().toLowerCase();
   const filter = (list: Booklist[]) =>
@@ -144,36 +259,54 @@ export default function BooklistsScreen() {
     sections.active.length + sections.draft.length + sections.archived.length;
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
-      <TopBar
-        query={search}
-        onQueryChange={setSearch}
-        onMenuPress={() => setDrawerOpen(true)}
-        onProfilePress={() => setProfileOpen(true)}
-        onSupportPress={() => setSupportOpen(true)}
+    <>
+
+      <CreateSourceSheet
+        visible={choosing}
+        onClose={() => setChoosing(false)}
+        onPick={handleSource}
       />
 
-      <ProfileMenu visible={profileOpen} onClose={() => setProfileOpen(false)} />
-      <SupportMenu
-        visible={supportOpen}
-        onClose={() => setSupportOpen(false)}
-        onOpenChat={() => setChatOpen(true)}
+      <BooklistReviewModal
+        visible={reviewImage !== null}
+        userId={userId}
+        image={reviewImage}
+        onClose={() => setReviewImage(null)}
+        onSubmitted={handleSubmitted}
       />
-      <SupportDrawer visible={chatOpen} onClose={() => setChatOpen(false)} />
+
+      <EditBooklistModal
+        booklist={editing}
+        onClose={() => setEditing(null)}
+        onSaved={handleSubmitted}
+      />
+
+      <ConfirmDialog
+        visible={deleting !== null}
+        title="Delete this booklist?"
+        message={
+          deleting
+            ? `"${deleting.school_name}" and its ${deleting.items.length} item${
+                deleting.items.length === 1 ? '' : 's'
+              } will be removed. This cannot be undone.`
+            : ''
+        }
+        confirmLabel="Delete"
+        destructive
+        busy={deleteBusy}
+        onConfirm={handleDelete}
+        onCancel={() => setDeleting(null)}
+      />
+
       <CreateBooklistModal
         visible={creating}
         userId={userId}
         onClose={() => setCreating(false)}
-        onCreated={reload}
+        // Wrapped, not passed straight through: reload's own first
+        // argument is { isRefresh }, and onCreated now hands over a
+        // note string, which would land in the wrong parameter.
+        onCreated={(note) => handleSubmitted(note ?? 'Booklist created.')}
       />
-
-      <View style={styles.body}>
-        <Sidebar
-          activeKey="booklists"
-          onNavigate={handleNavigate}
-          drawerOpen={drawerOpen}
-          onCloseDrawer={() => setDrawerOpen(false)}
-        />
 
         <ScrollView
           style={styles.scroll}
@@ -191,7 +324,7 @@ export default function BooklistsScreen() {
               </Text>
             </View>
             <Pressable
-              onPress={() => setCreating(true)}
+              onPress={() => setChoosing(true)}
               style={({ pressed }) => [styles.create, pressed && styles.pressed]}
               accessibilityRole="button"
               accessibilityLabel="Create a new booklist"
@@ -200,6 +333,36 @@ export default function BooklistsScreen() {
               <Text style={styles.createText}>Create New Booklist</Text>
             </Pressable>
           </View>
+
+          {flash && (
+            <View style={styles.flashBox}>
+              <Ionicons name="checkmark-circle" size={16} color={colors.success} />
+              <Text style={styles.flashText}>{flash}</Text>
+              <Pressable onPress={() => setFlash(null)} hitSlop={6} accessibilityLabel="Dismiss">
+                <Ionicons name="close" size={15} color={colors.success} />
+              </Pressable>
+            </View>
+          )}
+
+          {pickError && (
+            <View style={styles.errorBox}>
+              <Ionicons name="alert-circle" size={16} color={colors.danger} />
+              <Text style={styles.errorText}>{pickError}</Text>
+              <Pressable onPress={() => setPickError(null)} hitSlop={6} accessibilityLabel="Dismiss">
+                <Text style={styles.retry}>Dismiss</Text>
+              </Pressable>
+            </View>
+          )}
+
+          {actionError && (
+            <View style={styles.errorBox}>
+              <Ionicons name="alert-circle" size={16} color={colors.danger} />
+              <Text style={styles.errorText}>{actionError}</Text>
+              <Pressable onPress={() => setActionError(null)} hitSlop={6} accessibilityLabel="Dismiss">
+                <Text style={styles.retry}>Dismiss</Text>
+              </Pressable>
+            </View>
+          )}
 
           {error && (
             <View style={styles.errorBox}>
@@ -224,13 +387,15 @@ export default function BooklistsScreen() {
                 booklists={filter(sections.active)}
                 defaultExpanded
                 emptyText="Nothing active. Once a vendor quotes one of your lists it moves here."
+                actions={cardActions}
               />
               <Section
                 title="Drafts & pending"
-                caption="Sent out, no quotes back yet"
+                caption="Drafts you are still writing, and lists sent out with no quotes back yet"
                 icon="time-outline"
                 booklists={filter(sections.draft)}
                 emptyText="No lists waiting on quotes. Create one and vendors will price it."
+                actions={cardActions}
               />
               <Section
                 title="Archived"
@@ -239,12 +404,13 @@ export default function BooklistsScreen() {
                 booklists={filter(sections.archived)}
                 collapsible
                 emptyText="Nothing archived yet."
+                actions={cardActions}
               />
             </>
           )}
+          <Footer />
         </ScrollView>
-      </View>
-    </SafeAreaView>
+    </>
   );
 }
 
@@ -312,6 +478,19 @@ const styles = StyleSheet.create({
     marginBottom: spacing.lg,
   },
   errorText: { flex: 1, fontSize: font.sm, color: colors.danger },
+
+  flashBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: '#E8F5EE',
+    borderColor: '#BEE3CE',
+    borderWidth: 1,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.lg,
+  },
+  flashText: { flex: 1, fontSize: font.sm, color: colors.success, fontWeight: '600' },
   retry: { fontSize: font.sm, fontWeight: '800', color: colors.navy },
   pressed: { opacity: 0.85 },
 });

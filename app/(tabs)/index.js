@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -11,21 +11,20 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 
-import { TopBar } from '../../components/dashboard/TopBar';
-import { Sidebar } from '../../components/dashboard/Sidebar';
 import { ActiveBooklists } from '../../components/dashboard/ActiveBooklists';
+import { CreateBooklistSheet } from '../../components/dashboard/CreateBooklistSheet';
+import { CreateBooklistModal } from '../../components/booklists/CreateBooklistModal';
+import { pickBooklistImage, DRAFT_STATUS } from '../../lib/booklistUpload';
 import { CreateBooklist } from '../../components/dashboard/CreateBooklist';
 import { PendingQuotes } from '../../components/dashboard/PendingQuotes';
 import { FeaturedShops } from '../../components/dashboard/FeaturedShops';
 import { OrderSummary } from '../../components/dashboard/OrderSummary';
-import { ProfileMenu } from '../../components/profile/ProfileMenu';
-import { SupportMenu } from '../../components/support/SupportMenu';
-import { SupportDrawer } from '../../components/support/SupportDrawer';
 
 import { useLayout } from '../../hooks/useLayout';
 import { useDashboardData } from '../../hooks/useDashboardData';
 import { supabase } from '../../utils/supabase';
 import { colors, spacing, radius, font } from '../../theme';
+import { Footer } from '../../components/layout/Footer';
 
 /**
  * Booklist Hub — the buyer's dashboard.
@@ -37,11 +36,6 @@ import { colors, spacing, radius, font } from '../../theme';
  */
 export default function DashboardScreen() {
   const { isDesktop, isMobile, contentPadding } = useLayout();
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [profileOpen, setProfileOpen] = useState(false);
-  const [supportOpen, setSupportOpen] = useState(false);
-  const [chatOpen, setChatOpen] = useState(false);
-  const [search, setSearch] = useState('');
   const [newTitle, setNewTitle] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -50,12 +44,34 @@ export default function DashboardScreen() {
    * newly loaded booklist arrives fully selected without seeding state.
    */
   const [selection, setSelection] = useState({});
+
+  /** The create flow: pick a source, then name it and submit. */
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [pickedImage, setPickedImage] = useState(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [pickError, setPickError] = useState(null);
+  const [created, setCreated] = useState(null);
+  const [userId, setUserId] = useState(null);
+
+  // The modal writes book_requests.buyer_id itself, so it needs the id
+  // rather than the display name the dashboard hook returns.
+  useEffect(() => {
+    let alive = true;
+    supabase.auth
+      .getUser()
+      .then(({ data }) => alive && setUserId(data.user?.id ?? null))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
   const toggleItem = (id) =>
     setSelection((prev) => ({ ...prev, [id]: prev[id] === false ? true : false }));
 
   const {
     displayName,
     activeRequests,
+    draftCount,
     pendingQuotes,
     featuredShop,
     loading,
@@ -107,7 +123,10 @@ export default function DashboardScreen() {
         buyer_id: user.id,
         school_name: newTitle.trim(),
         class_level: '',
-        status: 'pending_quote',
+        // A draft. This box creates a list with no items in it, and a
+        // published request with nothing to price reaches every vendor's
+        // queue as a row they can only decline.
+        status: DRAFT_STATUS,
       });
       if (insertError) throw insertError;
 
@@ -120,18 +139,45 @@ export default function DashboardScreen() {
     }
   };
 
-  // TODO: wire to expo-image-picker + Supabase Storage ('booklists' bucket).
-  // The bucket exists but has no storage policies, so uploads are denied
-  // for every signed-in user today.
-  const handleCapture = () => console.log('[dashboard] capture booklist photo');
-
-  const handleCheckout = () => {
-    console.log('[dashboard] checkout', { total, itemCount });
-    // TODO: create an `orders` row, then hand off to the payment provider.
-    // Blocked today: `orders` has RLS enabled with no policies, so the
-    // insert silently fails, and there is no amount column to record this
-    // total against.
+  // Both "Create New Booklist" buttons — the navy tile here and the
+  // orange one under My Pending Quotes — open the same sheet. The
+  // inline title box below still creates in place for the quick path.
+  const handleCreateNew = () => {
+    setPickError(null);
+    setSheetOpen(true);
   };
+
+  /**
+   * Turn a choice from the sheet into the next screen.
+   *
+   * Typing goes to its own route so it is linkable. Camera and library
+   * both end at the same details modal — the only difference is where
+   * the image came from — and the picker is opened BEFORE the modal so
+   * a cancelled pick leaves nothing on screen to dismiss.
+   */
+  async function handleCreateSource(source) {
+    setSheetOpen(false);
+    if (source === 'manual') {
+      router.push('/booklists/new-manual');
+      return;
+    }
+    try {
+      const picked = await pickBooklistImage(source);
+      // Null means cancelled, or the permission was declined. Neither is
+      // an error and neither should open anything.
+      if (!picked) return;
+      setPickedImage(picked);
+      setDetailsOpen(true);
+    } catch (e) {
+      setPickError(e?.message ?? String(e));
+    }
+  }
+
+  // `orders` does have an insert policy, an amount column and the
+  // delivery fields — what is missing is the payment provider and a
+  // quote to charge against. /checkout says exactly that instead of
+  // pretending to collect card details.
+  const handleCheckout = () => router.push('/checkout');
 
   const mainColumn = (
     <View style={styles.colGap}>
@@ -140,12 +186,21 @@ export default function DashboardScreen() {
         selection={selection}
         onToggleItem={toggleItem}
         loading={loading}
+        // The row still expands in place; this opens the full
+        // breakdown with the quotes, which the hub card has no room
+        // for. Demo rows carry made-up ids that no query can resolve,
+        // so they get no link.
+        onOpenRequest={(r) => !r.demo && router.push(`/booklists/${r.id}`)}
+        // Drafts are filtered out of this card on purpose; the count is
+        // only so the empty state can point at where they actually live.
+        draftCount={draftCount}
+        onOpenDrafts={() => router.push('/booklists')}
       />
       <PendingQuotes
         quotes={pendingQuotes}
         loading={loading}
-        onCreatePress={handleCapture}
-        onSelectQuote={(q) => console.log('[dashboard] open quote', q.id)}
+        onCreatePress={handleCreateNew}
+        onSelectQuote={(q) => router.push(`/quotes/${q.id}`)}
       />
     </View>
   );
@@ -155,45 +210,26 @@ export default function DashboardScreen() {
       <CreateBooklist
         title={newTitle}
         onTitleChange={setNewTitle}
-        onCapture={handleCapture}
+        onCapture={handleCreateNew}
         onSubmit={handleCreate}
         submitting={submitting}
       />
       <FeaturedShops
         shop={featuredShop}
-        onViewShop={(s) => console.log('[dashboard] view shop', s?.id)}
-        onSelectCategory={(c) => console.log('[dashboard] category', c.id)}
+        // No id means there is no shop to open — the card is showing
+        // the "No shops yet" placeholder.
+        onViewShop={(s) => s?.id && router.push(`/shops/${s.id}`)}
+        onSelectCategory={(c) => router.push(`/categories/${c.slug}`)}
       />
     </View>
   );
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
-      <TopBar
-        query={search}
-        onQueryChange={setSearch}
-        onMenuPress={() => setDrawerOpen(true)}
-        onProfilePress={() => setProfileOpen(true)}
-        onSupportPress={() => setSupportOpen(true)}
-      />
-
-      <ProfileMenu visible={profileOpen} onClose={() => setProfileOpen(false)} />
-
-      <SupportMenu
-        visible={supportOpen}
-        onClose={() => setSupportOpen(false)}
-        onOpenChat={() => setChatOpen(true)}
-      />
-      <SupportDrawer visible={chatOpen} onClose={() => setChatOpen(false)} />
-
+    <>
+      {/* The top bar and sidebar come from AppShell now. What is
+          left here is the scrolling content and, on a wide screen,
+          the order summary sitting beside it. */}
       <View style={styles.body}>
-        <Sidebar
-          activeKey="dashboard"
-          onNavigate={handleNavigate}
-          drawerOpen={drawerOpen}
-          onCloseDrawer={() => setDrawerOpen(false)}
-        />
-
         <ScrollView
           style={styles.scroll}
           contentContainerStyle={[styles.scrollContent, { padding: contentPadding }]}
@@ -211,6 +247,24 @@ export default function DashboardScreen() {
               icon="alert-circle"
               text={`Could not load your dashboard: ${error.message}`}
               action={{ label: 'Retry', onPress: refresh }}
+            />
+          )}
+
+          {!!created && (
+            <Banner
+              tone="success"
+              icon="checkmark-circle"
+              text={created}
+              action={{ label: 'Dismiss', onPress: () => setCreated(null) }}
+            />
+          )}
+
+          {!!pickError && (
+            <Banner
+              tone="error"
+              icon="alert-circle"
+              text={`Could not open your photos: ${pickError}`}
+              action={{ label: 'Dismiss', onPress: () => setPickError(null) }}
             />
           )}
 
@@ -248,6 +302,7 @@ export default function DashboardScreen() {
           )}
 
           <View style={{ height: isDesktop ? 0 : 24 }} />
+          <Footer />
         </ScrollView>
 
         {isDesktop && (
@@ -258,12 +313,39 @@ export default function DashboardScreen() {
       {!isDesktop && (
         <OrderSummary total={total} itemCount={itemCount} onCheckout={handleCheckout} />
       )}
-    </SafeAreaView>
+
+      <CreateBooklistSheet
+        visible={sheetOpen}
+        onSelect={handleCreateSource}
+        onClose={() => setSheetOpen(false)}
+      />
+
+      <CreateBooklistModal
+        visible={detailsOpen}
+        userId={userId}
+        initialImage={pickedImage}
+        onClose={() => {
+          setDetailsOpen(false);
+          setPickedImage(null);
+        }}
+        onCreated={async (note) => {
+          setCreated(
+            note
+              ? `Booklist sent. ${note}`
+              : 'Booklist sent. Shops near you can now quote on it.'
+          );
+          // Pull the new row into Active Booklist Requests rather than
+          // waiting for the next pull-to-refresh.
+          await refresh();
+        }}
+      />
+    </>
   );
 }
 
 const BANNER_TONES = {
   error: { bg: '#FCEAE8', border: '#F0C4BF', fg: colors.danger },
+  success: { bg: '#E4F2E8', border: '#BFDFCB', fg: colors.success },
   warning: { bg: colors.warningBg, border: '#F0DDBB', fg: colors.warning },
   info: { bg: '#EAF1FB', border: '#CFDDF2', fg: colors.navy },
 };

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { CATEGORY_LABEL } from '../../hooks/useBooklists';
@@ -14,6 +14,7 @@ const CATEGORY_ICON: Record<string, keyof typeof Ionicons.glyphMap> = {
 
 /** How each stage should read to a parent, not to a database. */
 const STATUS_COPY: Record<RequestStatus, { label: string; tone: 'neutral' | 'info' | 'success' | 'warning' }> = {
+  draft: { label: 'Draft — not sent yet', tone: 'neutral' },
   pending_quote: { label: 'Waiting for quotes', tone: 'warning' },
   quoted: { label: 'Quotes received', tone: 'info' },
   ordered: { label: 'Ordered', tone: 'success' },
@@ -49,17 +50,33 @@ function Chip({ label, tone = 'neutral', icon }: {
   );
 }
 
-function ItemRow({ item }: { item: BookRequestItem }) {
+function ItemRow({ item, serial }: { item: BookRequestItem; serial: number }) {
   const lineTotal = item.unit_price == null ? null : item.unit_price * item.quantity;
+
   return (
     <View style={styles.itemRow}>
-      <Text style={styles.itemQty}>{item.quantity}×</Text>
+      {/* Position on the list, running unbroken across the category
+          groups — this is what a parent reads off against the paper
+          the school sent home. Faint and plain on purpose: the two
+          numbers on this row must not look alike. */}
+      <Text style={styles.itemSerial}>{serial}.</Text>
+
       <View style={{ flex: 1 }}>
         <Text style={styles.itemTitle} numberOfLines={2}>
           {item.title}
         </Text>
         {item.parsed && <Text style={styles.itemParsed}>read from photo — check this line</Text>}
       </View>
+
+      {/* Only when it is not 1. A column of "1×" against every line is
+          noise, and it is the one case where the quantity could be
+          mistaken for the serial beside it. */}
+      {item.quantity > 1 && (
+        <View style={styles.itemQty}>
+          <Text style={styles.itemQtyText}>×{item.quantity}</Text>
+        </View>
+      )}
+
       <Text style={[styles.itemPrice, lineTotal == null && styles.itemPriceMuted]}>
         {lineTotal == null ? 'Not priced' : formatNaira(lineTotal)}
       </Text>
@@ -71,12 +88,51 @@ interface Props {
   booklist: Booklist;
   defaultExpanded?: boolean;
   onPressQuotes?: (booklist: Booklist) => void;
+  onEdit?: (booklist: Booklist) => void;
+  onPublish?: (booklist: Booklist) => void;
+  onDelete?: (booklist: Booklist) => void;
+  /** True while this card's Publish is in flight. */
+  publishing?: boolean;
 }
 
-export function BooklistCard({ booklist, defaultExpanded = false, onPressQuotes }: Props) {
+export function BooklistCard({
+  booklist,
+  defaultExpanded = false,
+  onPressQuotes,
+  onEdit,
+  onPublish,
+  onDelete,
+  publishing = false,
+}: Props) {
   const [open, setOpen] = useState(defaultExpanded);
   const status = STATUS_COPY[booklist.status];
   const liveQuotes = booklist.quotes.filter((q) => q.status === 'sent').length;
+
+  /**
+   * Line id -> its number on the list.
+   *
+   * Built once over the groups in the order they render, rather than
+   * numbering within each group: the card splits a list into Textbooks /
+   * Stationery / Uniforms, and restarting at 1 in each would give a
+   * twelve-line booklist two items numbered 1. Walking the groups here
+   * means Textbooks 1-6 is followed by Other items 7-12, and the last
+   * number equals the line count in the header.
+   */
+  const serials = useMemo(() => {
+    const map = new Map<string, number>();
+    let n = 0;
+    for (const group of booklist.groups) {
+      for (const item of group.items) map.set(item.id, ++n);
+    }
+    return map;
+  }, [booklist.groups]);
+
+  const isDraft = booklist.status === 'draft';
+  // Editing and deleting stay available right up until a vendor commits
+  // time to the list. `requests_delete_own` draws the same line in the
+  // database, so a button shown past this point would fail at the policy
+  // rather than at the UI.
+  const isEditable = isDraft || booklist.status === 'pending_quote';
 
   const totalCaption =
     booklist.totalSource === 'order'
@@ -107,7 +163,10 @@ export function BooklistCard({ booklist, defaultExpanded = false, onPressQuotes 
             {booklist.school_name || 'Untitled booklist'}
           </Text>
           <Text style={styles.meta} numberOfLines={1}>
-            {[booklist.class_level, `${booklist.itemCount} item${booklist.itemCount === 1 ? '' : 's'}`]
+            {/* Lines, not copies. This number is what the serials count
+                up to, so the two cannot disagree; a line ordered twice
+                shows its own ×2 rather than inflating the total. */}
+            {[booklist.class_level, `${booklist.lineCount} item${booklist.lineCount === 1 ? '' : 's'}`]
               .filter(Boolean)
               .join(' · ')}
           </Text>
@@ -162,7 +221,7 @@ export function BooklistCard({ booklist, defaultExpanded = false, onPressQuotes 
                   </Text>
                 </View>
                 {group.items.map((item) => (
-                  <ItemRow key={item.id} item={item} />
+                  <ItemRow key={item.id} item={item} serial={serials.get(item.id) ?? 0} />
                 ))}
                 {group.unpricedCount > 0 && (
                   <Text style={styles.groupNote}>
@@ -177,6 +236,59 @@ export function BooklistCard({ booklist, defaultExpanded = false, onPressQuotes 
             <Text style={styles.caveat}>
               This total covers only the lines that have a price — it isn't the full cost yet.
             </Text>
+          )}
+
+          {isEditable && (onEdit || onPublish || onDelete) && (
+            <View style={styles.actions}>
+              {onEdit && (
+                <Pressable
+                  onPress={() => onEdit(booklist)}
+                  style={({ pressed }) => [styles.action, pressed && styles.pressed]}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Edit the booklist for ${booklist.school_name}`}
+                >
+                  <Ionicons name="create-outline" size={16} color={colors.navy} />
+                  <Text style={styles.actionText}>Edit List</Text>
+                </Pressable>
+              )}
+
+              {/* Publish only from 'draft'. A list already in the queue
+                  has nowhere to be published to. */}
+              {isDraft && onPublish && (
+                <Pressable
+                  onPress={() => onPublish(booklist)}
+                  disabled={publishing}
+                  style={({ pressed }) => [
+                    styles.action,
+                    styles.actionPrimary,
+                    pressed && styles.pressed,
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Publish ${booklist.school_name} to vendors`}
+                >
+                  <Ionicons
+                    name={publishing ? 'hourglass-outline' : 'send-outline'}
+                    size={15}
+                    color={colors.onNavy}
+                  />
+                  <Text style={styles.actionPrimaryText}>
+                    {publishing ? 'Publishing…' : 'Publish'}
+                  </Text>
+                </Pressable>
+              )}
+
+              {onDelete && (
+                <Pressable
+                  onPress={() => onDelete(booklist)}
+                  style={({ pressed }) => [styles.action, styles.actionDanger, pressed && styles.pressed]}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Delete the booklist for ${booklist.school_name}`}
+                >
+                  <Ionicons name="trash-outline" size={16} color={colors.danger} />
+                  <Text style={styles.actionDangerText}>Delete List</Text>
+                </Pressable>
+              )}
+            </View>
           )}
 
           {liveQuotes > 0 && (
@@ -255,13 +367,57 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.border,
   },
-  itemQty: { fontSize: font.sm, fontWeight: '700', color: colors.textMuted, minWidth: 26 },
+  // Fixed width so every title starts on the same x, up to "12." and
+  // beyond; tabular-ish alignment without a monospace font.
+  itemSerial: {
+    fontSize: font.sm,
+    fontWeight: '600',
+    color: colors.textFaint,
+    minWidth: 24,
+    paddingTop: 1,
+  },
+  // A chip, where the serial is bare text. Same information density,
+  // deliberately different shape.
+  itemQty: {
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: radius.sm,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  itemQtyText: { fontSize: font.xs, fontWeight: '700', color: colors.textMuted },
   itemTitle: { fontSize: font.md, color: colors.text },
   itemParsed: { fontSize: font.xs, color: colors.orangeDark, fontStyle: 'italic', marginTop: 1 },
   itemPrice: { fontSize: font.md, fontWeight: '700', color: colors.text },
   itemPriceMuted: { color: colors.textFaint, fontWeight: '500', fontSize: font.sm },
 
   caveat: { fontSize: font.xs, color: colors.warning, marginTop: spacing.md, lineHeight: 16 },
+
+  actions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginTop: spacing.lg,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  action: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    // 44 tall: these sit close together and one of them is destructive.
+    minHeight: 44,
+  },
+  actionText: { fontSize: font.sm, fontWeight: '700', color: colors.navy },
+  actionPrimary: { backgroundColor: colors.navy, borderColor: colors.navy },
+  actionPrimaryText: { fontSize: font.sm, fontWeight: '700', color: colors.onNavy },
+  actionDanger: { borderColor: '#F0C4BF' },
+  actionDangerText: { fontSize: font.sm, fontWeight: '700', color: colors.danger },
 
   cta: {
     flexDirection: 'row',

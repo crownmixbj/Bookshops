@@ -11,17 +11,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
 
-import { TopBar } from '../../components/dashboard/TopBar';
-import { Sidebar, NAV_ITEMS } from '../../components/dashboard/Sidebar';
-import {
-  VendorTopBar,
-  VendorSidebar,
-  type VendorNavItem,
-} from '../../components/vendor/VendorShell';
-import { VendorProfileMenu } from '../../components/vendor/VendorProfileMenu';
-import { ProfileMenu } from '../../components/profile/ProfileMenu';
-import { SupportMenu } from '../../components/support/SupportMenu';
-import { SupportDrawer } from '../../components/support/SupportDrawer';
 import {
   Section,
   Field,
@@ -36,6 +25,8 @@ import { useLayout } from '../../hooks/useLayout';
 import { useSettings, type SaveState } from '../../hooks/useSettings';
 import { colors, spacing, radius, font } from '../../theme';
 import type { ThemePreference } from '../../types/db';
+import { Footer } from '../../components/layout/Footer';
+import { useShell } from '../../components/layout/ShellContext';
 
 const IMPLEMENTED = {
   dashboard: '/',
@@ -48,6 +39,7 @@ const IMPLEMENTED = {
 const MIN_PASSWORD = 8;
 
 export default function SettingsScreen() {
+  const { refreshProfile } = useShell();
   const { isMobile, contentPadding } = useLayout();
   // The profile dropdown's "Edit Profile" links here with ?section=profile
   // rather than carrying its own copy of the form.
@@ -55,12 +47,6 @@ export default function SettingsScreen() {
   const scrollRef = useRef<ScrollView>(null);
   const profileY = useRef(0);
   const [highlightProfile, setHighlightProfile] = useState(false);
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [profileOpen, setProfileOpen] = useState(false);
-  const [supportOpen, setSupportOpen] = useState(false);
-  const [chatOpen, setChatOpen] = useState(false);
-  const [accountOpen, setAccountOpen] = useState(false);
-  const [search, setSearch] = useState('');
 
   const {
     profile,
@@ -68,6 +54,7 @@ export default function SettingsScreen() {
     email,
     emailVerified,
     isVendor,
+    isAdmin,
     loading,
     error,
     updateProfile,
@@ -138,11 +125,6 @@ export default function SettingsScreen() {
     setStoreEmail(vendor.email ?? '');
   }, [vendor]);
 
-  async function handleNavigate(item: (typeof NAV_ITEMS)[number]) {
-    if (item.key === 'logout') return signOut();
-    const target = IMPLEMENTED[item.key as keyof typeof IMPLEMENTED];
-    if (target && target !== '/settings') router.push(target);
-  }
 
   /**
    * Settings is shared by both roles, but the chrome around it is not.
@@ -150,11 +132,6 @@ export default function SettingsScreen() {
    * "open my shop settings" ended up looking like being thrown back to
    * the buyer app. Same screen, correct shell.
    */
-  async function handleVendorNavigate(item: VendorNavItem) {
-    if (item.key === 'logout') return signOut();
-    if (item.key === 'dashboard') router.push('/vendor');
-    // The other vendor destinations have no screens yet, so they stay inert.
-  }
 
   /** Runs a save, then flashes "Saved" briefly so the write is visible. */
   async function runSave(
@@ -168,15 +145,19 @@ export default function SettingsScreen() {
   }
 
   const savePersonal = () =>
-    runSave(setPersonalState, () =>
-      updateProfile({
+    runSave(setPersonalState, async () => {
+      const ok = await updateProfile({
         full_name: fullName.trim(),
         phone_number: phone.trim() || null,
         default_delivery_address: address.trim() || null,
         default_delivery_city: city.trim() || null,
         default_delivery_phone: deliveryPhone.trim() || null,
-      })
-    );
+      });
+      // The header lives in AppShell, which never unmounts, so it will
+      // not pick up a new name on its own.
+      if (ok) refreshProfile();
+      return ok;
+    });
 
   const saveVendor = () =>
     runSave(setVendorState, () =>
@@ -213,60 +194,7 @@ export default function SettingsScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
-      {isVendor ? (
-        <VendorTopBar
-          storeName={vendor?.store_name ?? 'Your shop'}
-          query={search}
-          onQueryChange={setSearch}
-          busyMode={vendor?.busy_mode ?? false}
-          onBusyModeChange={(v) => updateVendor({ busy_mode: v })}
-          onMenuPress={() => setDrawerOpen(true)}
-          onProfilePress={() => setAccountOpen(true)}
-        />
-      ) : (
-        <TopBar
-          query={search}
-          onQueryChange={setSearch}
-          onMenuPress={() => setDrawerOpen(true)}
-          onProfilePress={() => setProfileOpen(true)}
-          onSupportPress={() => setSupportOpen(true)}
-        />
-      )}
-
-      {isVendor ? (
-        <VendorProfileMenu
-          visible={accountOpen}
-          vendor={vendor}
-          onClose={() => setAccountOpen(false)}
-        />
-      ) : (
-        <ProfileMenu visible={profileOpen} onClose={() => setProfileOpen(false)} />
-      )}
-      <SupportMenu
-        visible={supportOpen}
-        onClose={() => setSupportOpen(false)}
-        onOpenChat={() => setChatOpen(true)}
-      />
-      <SupportDrawer visible={chatOpen} onClose={() => setChatOpen(false)} />
-
-      <View style={styles.body}>
-        {isVendor ? (
-          <VendorSidebar
-            activeKey="settings"
-            onNavigate={handleVendorNavigate}
-            drawerOpen={drawerOpen}
-            onCloseDrawer={() => setDrawerOpen(false)}
-          />
-        ) : (
-          <Sidebar
-            activeKey="settings"
-            onNavigate={handleNavigate}
-            drawerOpen={drawerOpen}
-            onCloseDrawer={() => setDrawerOpen(false)}
-          />
-        )}
-
+    <>
         <ScrollView
           ref={scrollRef}
           style={styles.scroll}
@@ -339,7 +267,7 @@ export default function SettingsScreen() {
                   />
                   <ReadOnlyRow
                     label="Account type"
-                    value={isVendor ? 'Vendor' : 'Buyer'}
+                    value={isAdmin ? 'Administrator' : isVendor ? 'Vendor' : 'Buyer'}
                     note="Only an administrator can change your account type."
                   />
                 </Section>
@@ -564,9 +492,9 @@ export default function SettingsScreen() {
               </View>
             </View>
           )}
+          <Footer audience={isAdmin ? 'admin' : isVendor ? 'vendor' : 'buyer'} />
         </ScrollView>
-      </View>
-    </SafeAreaView>
+    </>
   );
 }
 

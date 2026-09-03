@@ -12,11 +12,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 
-import { TopBar } from '../../components/dashboard/TopBar';
-import { Sidebar, NAV_ITEMS } from '../../components/dashboard/Sidebar';
-import { ProfileMenu } from '../../components/profile/ProfileMenu';
-import { SupportMenu } from '../../components/support/SupportMenu';
-import { SupportDrawer } from '../../components/support/SupportDrawer';
 import { OrderCard } from '../../components/orders/OrderCard';
 
 import { useLayout } from '../../hooks/useLayout';
@@ -24,6 +19,8 @@ import { useOrders } from '../../hooks/useOrders';
 import { supabase } from '../../utils/supabase';
 import { colors, spacing, radius, font } from '../../theme';
 import type { OrderView } from '../../types/db';
+import { Footer } from '../../components/layout/Footer';
+import { useShell } from '../../components/layout/ShellContext';
 
 /** Routes that exist as files. The rest of the sidebar is inert. */
 const IMPLEMENTED = { dashboard: '/', booklists: '/booklists', orders: '/orders', saved: '/saved', settings: '/settings' } as const;
@@ -99,32 +96,20 @@ function Section({
  */
 export default function OrdersScreen() {
   const { isMobile, contentPadding } = useLayout();
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [profileOpen, setProfileOpen] = useState(false);
-  const [supportOpen, setSupportOpen] = useState(false);
-  const [chatOpen, setChatOpen] = useState(false);
-  const [search, setSearch] = useState('');
-  const [disputeContext, setDisputeContext] = useState<string | null>(null);
+  // The search box lives in the shell's top bar so its text survives
+  // navigation; this screen just reads what was typed.
+  const { search, openSupportChat } = useShell();
 
   const { sections, loading, refreshing, error, refresh } = useOrders();
 
-  async function handleNavigate(item: (typeof NAV_ITEMS)[number]) {
-    if (item.key === 'logout') {
-      await supabase.auth.signOut();
-      return;
-    }
-    const target = IMPLEMENTED[item.key as keyof typeof IMPLEMENTED];
-    if (target && target !== '/orders') router.push(target);
-  }
 
   function handleDispute(order: OrderView) {
-    setDisputeContext(
+    openSupportChat(
       `Order ${order.reference} — ${order.vendor?.store_name ?? 'vendor'}\n` +
         `Placed ${new Date(order.placed_at ?? order.created_at).toLocaleDateString('en-NG')}\n` +
         `${order.itemCount} item(s)\n\n` +
         `What went wrong:\n`
     );
-    setChatOpen(true);
   }
 
   const q = search.trim().toLowerCase();
@@ -145,37 +130,7 @@ export default function OrdersScreen() {
   const total = sections.active.length + sections.completed.length + sections.cancelled.length;
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
-      <TopBar
-        query={search}
-        onQueryChange={setSearch}
-        onMenuPress={() => setDrawerOpen(true)}
-        onProfilePress={() => setProfileOpen(true)}
-        onSupportPress={() => setSupportOpen(true)}
-      />
-
-      <ProfileMenu visible={profileOpen} onClose={() => setProfileOpen(false)} />
-      <SupportMenu
-        visible={supportOpen}
-        onClose={() => setSupportOpen(false)}
-        onOpenChat={() => setChatOpen(true)}
-      />
-      <SupportDrawer
-        visible={chatOpen}
-        onClose={() => {
-          setChatOpen(false);
-          setDisputeContext(null);
-        }}
-        initialMessage={disputeContext ?? undefined}
-      />
-
-      <View style={styles.body}>
-        <Sidebar
-          activeKey="orders"
-          onNavigate={handleNavigate}
-          drawerOpen={drawerOpen}
-          onCloseDrawer={() => setDrawerOpen(false)}
-        />
+    <>
 
         <ScrollView
           style={styles.scroll}
@@ -240,9 +195,9 @@ export default function OrdersScreen() {
           )}
 
           <View style={{ height: isMobile ? spacing.xxl : 0 }} />
+          <Footer />
         </ScrollView>
-      </View>
-    </SafeAreaView>
+    </>
   );
 }
 

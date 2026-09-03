@@ -11,20 +11,16 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 
-import {
-  VendorTopBar,
-  VendorSidebar,
-  Panel,
-  type VendorNavItem,
-} from '../../components/vendor/VendorShell';
+import { Panel } from '../../components/vendor/VendorShell';
 import { RequestQueue } from '../../components/vendor/RequestQueue';
-import { VendorProfileMenu } from '../../components/vendor/VendorProfileMenu';
 import { QuoteEditor } from '../../components/vendor/QuoteEditor';
 
 import { useLayout } from '../../hooks/useLayout';
 import { useVendorDashboard } from '../../hooks/useVendorDashboard';
 import { supabase } from '../../utils/supabase';
 import { colors, spacing, radius, font } from '../../theme';
+import { Footer } from '../../components/layout/Footer';
+import { useShell } from '../../components/layout/ShellContext';
 
 /**
  * Vendor dashboard — the bookshop's side of the marketplace.
@@ -35,9 +31,9 @@ import { colors, spacing, radius, font } from '../../theme';
  */
 export default function VendorDashboardScreen() {
   const { isMobile, contentPadding } = useLayout();
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [accountOpen, setAccountOpen] = useState(false);
-  const [search, setSearch] = useState('');
+  // The search box lives in the shell's top bar so its text survives
+  // navigation; this screen just reads what was typed.
+  const { search } = useShell();
 
   const {
     vendor,
@@ -61,14 +57,6 @@ export default function VendorDashboardScreen() {
     refresh,
   } = useVendorDashboard();
 
-  async function handleNavigate(item: VendorNavItem) {
-    if (item.key === 'logout') {
-      await supabase.auth.signOut();
-      return;
-    }
-    // Settings is the one other vendor-relevant screen that exists.
-    if (item.key === 'settings') router.push('/settings');
-  }
 
   const q = search.trim().toLowerCase();
   const visible = useMemo(
@@ -90,7 +78,9 @@ export default function VendorDashboardScreen() {
   // ---- gates --------------------------------------------------
   if (isVendor === false) {
     return (
-      <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
+      // The shell already provides the safe area; a second SafeAreaView
+      // here would pad the notch twice.
+      <View style={styles.safe}>
         <View style={styles.gate}>
           <Ionicons name="storefront-outline" size={34} color={colors.textFaint} />
           <Text style={styles.gateTitle}>This area is for vendors</Text>
@@ -106,36 +96,12 @@ export default function VendorDashboardScreen() {
             <Text style={styles.gateBtnText}>Back to my dashboard</Text>
           </Pressable>
         </View>
-      </SafeAreaView>
+      </View>
     );
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
-      <VendorTopBar
-        storeName={vendor?.store_name ?? 'Your shop'}
-        query={search}
-        onQueryChange={setSearch}
-        busyMode={vendor?.busy_mode ?? false}
-        onBusyModeChange={setBusyMode}
-        onMenuPress={() => setDrawerOpen(true)}
-        onProfilePress={() => setAccountOpen(true)}
-      />
-
-      <VendorProfileMenu
-        visible={accountOpen}
-        vendor={vendor}
-        onClose={() => setAccountOpen(false)}
-      />
-
-      <View style={styles.body}>
-        <VendorSidebar
-          activeKey="dashboard"
-          badges={{ booklists: newCount }}
-          onNavigate={handleNavigate}
-          drawerOpen={drawerOpen}
-          onCloseDrawer={() => setDrawerOpen(false)}
-        />
+    <>
 
         <ScrollView
           style={styles.scroll}
@@ -205,9 +171,9 @@ export default function VendorDashboardScreen() {
               <View style={{ height: isMobile ? spacing.xxl : spacing.lg }} />
             </>
           )}
+          <Footer audience="vendor" />
         </ScrollView>
-      </View>
-    </SafeAreaView>
+    </>
   );
 }
 

@@ -25,6 +25,10 @@ export const colors = {
   textMuted: '#5B6B85',
   textFaint: '#8B99AE',
   onNavy: '#FFFFFF',
+  // For text on a navy surface (the footer). Both clear WCAG AA against
+  // navyDark: 7.2:1 and 4.5:1 respectively.
+  onNavyMuted: '#A9B8D4',
+  onNavyFaint: '#7E90B5',
 
   // Lines
   border: '#DCE3ED',

@@ -273,18 +273,25 @@ export function trendFor(series: number[] | undefined): number | null {
   return ((curr - prev) / prev) * 100;
 }
 
+/**
+ * `stats?.totals?.users` guards only the null case: if the RPC ever
+ * returns a shape we did not expect — an older migration, a partial row,
+ * an array where an object was meant — `.totals` is undefined and the
+ * whole admin dashboard throws while rendering, which shows as a white
+ * page. Optional-chaining every hop degrades to zeroes instead.
+ */
 export function useAdminMetrics(stats: PlatformStats | null) {
   return useMemo(
     () => [
-      { key: 'users', label: 'Total Users', value: stats?.totals.users ?? 0, series: stats?.series.users },
-      { key: 'vendors', label: 'Total Vendors', value: stats?.totals.vendors ?? 0, series: stats?.series.vendors },
-      { key: 'orders', label: 'Total Orders', value: stats?.totals.orders ?? 0, series: stats?.series.orders },
-      { key: 'booklists', label: 'Total Booklists', value: stats?.totals.booklists ?? 0, series: stats?.series.booklists },
+      { key: 'users', label: 'Total Users', value: stats?.totals?.users ?? 0, series: stats?.series?.users },
+      { key: 'vendors', label: 'Total Vendors', value: stats?.totals?.vendors ?? 0, series: stats?.series?.vendors },
+      { key: 'orders', label: 'Total Orders', value: stats?.totals?.orders ?? 0, series: stats?.series?.orders },
+      { key: 'booklists', label: 'Total Booklists', value: stats?.totals?.booklists ?? 0, series: stats?.series?.booklists },
       {
         key: 'revenue',
         label: 'Platform Revenue',
-        value: stats?.totals.revenue ?? 0,
-        series: stats?.series.revenue,
+        value: stats?.totals?.revenue ?? 0,
+        series: stats?.series?.revenue,
         isMoney: true,
       },
     ],

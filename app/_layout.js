@@ -1,7 +1,10 @@
 import { useEffect, useRef } from 'react';
 import { Stack, router, useSegments } from 'expo-router';
-import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
 import { useAuthSession, landingRouteFor } from '../hooks/useAuthSession';
+import { isConfigured, missingEnv } from '../utils/supabase';
+import { BootScreen, ConfigErrorScreen } from '../components/layout/BootScreen';
+import { AppShell } from '../components/layout/AppShell';
+import { colors } from '../theme';
 
 /**
  * Root layout: the auth gate, and the one place that decides where a
@@ -18,6 +21,14 @@ import { useAuthSession, landingRouteFor } from '../hooks/useAuthSession';
  * buyer hub to place their own order should stay there, and yanking them
  * back on every render would make that impossible.
  */
+/**
+ * Top-level route segments a signed-out visitor may open.
+ *
+ * 'auth' is handled separately because a SIGNED-IN user on those screens
+ * gets redirected onward; these ones are simply always allowed.
+ */
+const PUBLIC_SEGMENTS = new Set(['services', 'legal', 'about', 'how-it-works', 'contact', 'careers']);
+
 export default function RootLayout() {
   const { session, role, roleResolved, profileMissing, roleError, initialized } =
     useAuthSession();
@@ -30,11 +41,31 @@ export default function RootLayout() {
     if (!initialized) return;
 
     const inAuthGroup = segments[0] === 'auth';
+    const isPublic = inAuthGroup || PUBLIC_SEGMENTS.has(segments[0]);
 
     if (!session) {
       // Clear the marker so the next sign-in lands again.
       landedFor.current = null;
-      if (!inAuthGroup) router.replace('/auth/login');
+
+      // Expo Router reports an empty segment array for one tick while it
+      // resolves a popstate — a browser Back or Forward press. It is not
+      // a route: '/' resolves to ['(tabs)'], never to []. Reading it as
+      // one made isPublic false and fired the replace below, so a
+      // signed-out visitor who opened Terms from the login page and then
+      // pressed Forward was thrown back to the login form, cancelling
+      // the navigation they had just made.
+      //
+      // This defers the decision rather than skipping it: the empty
+      // array is always followed immediately by the resolved one, and
+      // this effect re-runs on it. Deliberately scoped to the
+      // signed-out branch — the landing logic below reads the same
+      // empty tick as "at the buyer root", which is how a vendor
+      // arriving on a confirmation link reaches /vendor.
+      if (segments.length === 0) return;
+      // Info and legal pages must open without an account. Bouncing a
+      // visitor from the Privacy Policy to a login form is both hostile
+      // and, for a policy you are obliged to publish, wrong.
+      if (!isPublic) router.replace('/auth/login');
       return;
     }
 
@@ -63,16 +94,18 @@ export default function RootLayout() {
     }
   }, [session, role, roleResolved, segments, initialized]);
 
+  // A build without Supabase credentials cannot do anything, and used to
+  // render as a white page — the error is thrown while the module loads,
+  // so React never gets to draw. Say what is missing instead.
+  if (!isConfigured) {
+    return <ConfigErrorScreen missing={missingEnv} />;
+  }
+
   // Hold the splash until both the session AND the role are known. The
   // role gate only applies while signed in; a signed-out user resolves
   // immediately.
   if (!initialized || (session && !roleResolved)) {
-    return (
-      <View style={styles.splash}>
-        <ActivityIndicator size="large" color="#1E3A6E" />
-        {session && !roleResolved && <Text style={styles.splashText}>Signing you in…</Text>}
-      </View>
-    );
+    return <BootScreen message={session && !roleResolved ? 'Signing you in…' : undefined} />;
   }
 
   // A signed-in user with no profile row still gets into the app — the
@@ -87,10 +120,24 @@ export default function RootLayout() {
     );
   }
 
-  return <Stack screenOptions={{ headerShown: false }} />;
-}
+  // contentStyle paints the navigator's own background. Without it the
+  // stack defaults to white and you get a flash of it behind every push
+  // — most visible on web, where the transition is instant.
+  const stack = (
+    <Stack
+      screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.page } }}
+    />
+  );
 
-const styles = StyleSheet.create({
-  splash: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12 },
-  splashText: { fontSize: 14, color: '#5B6B85' },
-});
+  // The chrome is mounted HERE, outside the navigator, so it survives
+  // every navigation instead of being torn down and rebuilt by each
+  // screen. That is what keeps the header on screen — and what keeps
+  // the search box from clearing — as you move around.
+  //
+  // Signed out there is no chrome to draw: the auth screens and the
+  // public info pages stand alone.
+  const inAuthGroup = segments[0] === 'auth';
+  if (!session || inAuthGroup) return stack;
+
+  return <AppShell role={role ?? 'buyer'}>{stack}</AppShell>;
+}

@@ -1,0 +1,5 @@
+# Cloudflare Pages serves static files. The Expo web export emits only
+# index.html, so a direct hit or refresh on /admin, /vendor, /orders etc.
+# would 404 without this — the SPA router never gets a chance to run.
+# 200 (not 301) so the URL stays put and expo-router reads the real path.
+/*    /index.html   200

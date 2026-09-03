@@ -78,6 +78,10 @@ export function PendingQuotes({ quotes, onSelectQuote, onCreatePress, loading })
         onPress={onCreatePress}
         style={({ pressed }) => [styles.cta, pressed && styles.ctaPressed]}
         accessibilityRole="button"
+        // Without this a screen reader announces the icon glyph
+        // alongside the label. The navy tile above already names
+        // itself; this one did not.
+        accessibilityLabel="Create a new booklist"
       >
         <Ionicons name="add" size={16} color={colors.onNavy} />
         <Text style={styles.ctaText}>Create New Booklist</Text>

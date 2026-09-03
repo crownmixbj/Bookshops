@@ -12,11 +12,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 
-import { TopBar } from '../../components/dashboard/TopBar';
-import { Sidebar, NAV_ITEMS } from '../../components/dashboard/Sidebar';
-import { ProfileMenu } from '../../components/profile/ProfileMenu';
-import { SupportMenu } from '../../components/support/SupportMenu';
-import { SupportDrawer } from '../../components/support/SupportDrawer';
 import { ShopCard } from '../../components/shops/ShopCard';
 import { SendBooklistModal } from '../../components/shops/SendBooklistModal';
 
@@ -25,6 +20,8 @@ import { useSavedShops } from '../../hooks/useSavedShops';
 import { supabase } from '../../utils/supabase';
 import { colors, spacing, radius, font } from '../../theme';
 import type { ShopView } from '../../types/db';
+import { Footer } from '../../components/layout/Footer';
+import { useShell } from '../../components/layout/ShellContext';
 
 const IMPLEMENTED = {
   dashboard: '/',
@@ -36,11 +33,9 @@ const IMPLEMENTED = {
 
 export default function SavedShopsScreen() {
   const { isMobile, isDesktop, contentPadding } = useLayout();
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [profileOpen, setProfileOpen] = useState(false);
-  const [supportOpen, setSupportOpen] = useState(false);
-  const [chatOpen, setChatOpen] = useState(false);
-  const [search, setSearch] = useState('');
+  // The search box lives in the shell's top bar so its text survives
+  // navigation; this screen just reads what was typed.
+  const { search } = useShell();
   const [quoteTarget, setQuoteTarget] = useState<ShopView | null>(null);
   const [gridWidth, setGridWidth] = useState<number | null>(null);
 
@@ -57,14 +52,6 @@ export default function SavedShopsScreen() {
     refresh,
   } = useSavedShops();
 
-  async function handleNavigate(item: (typeof NAV_ITEMS)[number]) {
-    if (item.key === 'logout') {
-      await supabase.auth.signOut();
-      return;
-    }
-    const target = IMPLEMENTED[item.key as keyof typeof IMPLEMENTED];
-    if (target && target !== '/saved') router.push(target);
-  }
 
   // Opening a shop records the visit, which is what populates the
   // recently-viewed section. Fire-and-forget by design.
@@ -98,22 +85,8 @@ export default function SavedShopsScreen() {
   const cardWidth = gridWidth ? (gridWidth - gap * (columns - 1)) / columns : undefined;
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
-      <TopBar
-        query={search}
-        onQueryChange={setSearch}
-        onMenuPress={() => setDrawerOpen(true)}
-        onProfilePress={() => setProfileOpen(true)}
-        onSupportPress={() => setSupportOpen(true)}
-      />
+    <>
 
-      <ProfileMenu visible={profileOpen} onClose={() => setProfileOpen(false)} />
-      <SupportMenu
-        visible={supportOpen}
-        onClose={() => setSupportOpen(false)}
-        onOpenChat={() => setChatOpen(true)}
-      />
-      <SupportDrawer visible={chatOpen} onClose={() => setChatOpen(false)} />
       <SendBooklistModal
         visible={quoteTarget !== null}
         shop={quoteTarget}
@@ -122,14 +95,6 @@ export default function SavedShopsScreen() {
         onSent={refresh}
         onCreateNew={() => router.push('/booklists')}
       />
-
-      <View style={styles.body}>
-        <Sidebar
-          activeKey="saved"
-          onNavigate={handleNavigate}
-          drawerOpen={drawerOpen}
-          onCloseDrawer={() => setDrawerOpen(false)}
-        />
 
         <ScrollView
           style={styles.scroll}
@@ -227,9 +192,9 @@ export default function SavedShopsScreen() {
               </View>
             </View>
           )}
+          <Footer />
         </ScrollView>
-      </View>
-    </SafeAreaView>
+    </>
   );
 }
 

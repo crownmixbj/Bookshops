@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -16,6 +16,8 @@ import {
   pickBooklistImage,
   uploadBooklistImage,
   parseBooklistImage,
+  DRAFT_STATUS,
+  describeBooklistError,
   type PickedImage,
 } from '../../lib/booklistUpload';
 import { colors, spacing, radius, font, shadow } from '../../theme';
@@ -25,7 +27,21 @@ interface Props {
   visible: boolean;
   userId: string | null;
   onClose: () => void;
-  onCreated: () => void | Promise<void>;
+  /**
+   * Called once the request row exists. The argument carries anything
+   * worth saying that is not an error — the photo failed to upload, or
+   * it uploaded but nothing could be read from it — so the caller can
+   * surface it after this modal has closed.
+   */
+  onCreated: (note?: string | null) => void | Promise<void>;
+  /**
+   * A photo the caller has already picked.
+   *
+   * The Booklist Hub asks "camera, file, or type it in?" before opening
+   * this modal, so by the time it appears the image is in hand. Without
+   * this the person would be made to choose the same photo twice.
+   */
+  initialImage?: PickedImage | null;
 }
 
 /**
@@ -38,7 +54,13 @@ interface Props {
  * upload and the parse are then best-effort: neither failing should
  * discard a booklist the user has already created.
  */
-export function CreateBooklistModal({ visible, userId, onClose, onCreated }: Props) {
+export function CreateBooklistModal({
+  visible,
+  userId,
+  onClose,
+  onCreated,
+  initialImage = null,
+}: Props) {
   const { isMobile } = useLayout();
   const [school, setSchool] = useState('');
   const [classLevel, setClassLevel] = useState('');
@@ -56,6 +78,13 @@ export function CreateBooklistModal({ visible, userId, onClose, onCreated }: Pro
     setNotice(null);
     setStep(null);
   }
+
+  // Seed on open, not on every render: once the modal is up the person
+  // may swap the photo with the Change button, and re-applying the
+  // caller's image would undo that.
+  useEffect(() => {
+    if (visible && initialImage) setImage(initialImage);
+  }, [visible, initialImage]);
 
   async function handlePick(source: 'library' | 'camera') {
     setError(null);
@@ -80,13 +109,23 @@ export function CreateBooklistModal({ visible, userId, onClose, onCreated }: Pro
           buyer_id: userId,
           school_name: school.trim(),
           class_level: classLevel.trim(),
-          status: 'pending_quote',
+          // A draft, not a published request. Nothing reaches a vendor
+          // until the buyer presses Publish on the hub — which is what
+          // makes it safe to save a half-finished list.
+          status: DRAFT_STATUS,
         })
         .select('id')
         .single();
       if (insertError) throw insertError;
 
       const requestId = created.id as string;
+
+      // Tracked in a local as well as in state: `notice` below is read
+      // from the render closure, which still holds the value from
+      // BEFORE this submit, so setNotice alone could never be seen —
+      // the modal closed and reset() wiped it. A photo that failed to
+      // upload was silently swallowed because of it.
+      let pendingNotice: string | null = null;
 
       if (image) {
         try {
@@ -110,26 +149,27 @@ export function CreateBooklistModal({ visible, userId, onClose, onCreated }: Pro
               }))
             );
           } else {
+            pendingNotice = result.note;
             setNotice(result.note);
           }
         } catch (uploadError) {
           // The booklist exists; only the photo failed. Say so plainly
           // rather than rolling back work the user has done.
-          setNotice(
-            `Booklist created, but the photo could not be uploaded: ${
-              (uploadError as Error).message
-            }`
-          );
+          pendingNotice = `Booklist created, but the photo could not be uploaded: ${
+            (uploadError as Error).message
+          }`;
+          setNotice(pendingNotice);
         }
       }
 
-      await onCreated();
-      if (!notice) {
-        reset();
-        onClose();
-      }
+      // Always hand the note outward and close. Keeping the modal open
+      // to display it stranded the person on a form for a booklist that
+      // had already been created.
+      await onCreated(pendingNotice);
+      reset();
+      onClose();
     } catch (e) {
-      setError(e as Error);
+      setError(new Error(describeBooklistError(e)));
     } finally {
       setBusy(false);
       setStep(null);
@@ -159,6 +199,11 @@ export function CreateBooklistModal({ visible, userId, onClose, onCreated }: Pro
               placeholderTextColor={colors.textFaint}
               style={styles.input}
               autoCapitalize="words"
+              // The <Text> above is not tied to this input, so without
+              // these a screen reader lands on the field and announces
+              // nothing at all.
+              accessibilityLabel="School name"
+              accessibilityHint="Required. The school this booklist is for."
             />
 
             <Text style={styles.label}>Class</Text>
@@ -169,6 +214,8 @@ export function CreateBooklistModal({ visible, userId, onClose, onCreated }: Pro
               placeholderTextColor={colors.textFaint}
               style={styles.input}
               autoCapitalize="characters"
+              accessibilityLabel="Class or grade level"
+              accessibilityHint="Optional. Helps shops quote the right editions."
             />
 
             <Text style={styles.label}>Photo of the list (optional)</Text>
@@ -234,6 +281,7 @@ export function CreateBooklistModal({ visible, userId, onClose, onCreated }: Pro
             <Pressable
               onPress={handleSubmit}
               disabled={!canSubmit}
+              accessibilityLabel="Save this booklist as a draft"
               style={({ pressed }) => [
                 styles.btn,
                 styles.btnPrimary,
@@ -248,7 +296,7 @@ export function CreateBooklistModal({ visible, userId, onClose, onCreated }: Pro
                   <Text style={styles.btnPrimaryText}>{step ?? 'Working…'}</Text>
                 </View>
               ) : (
-                <Text style={styles.btnPrimaryText}>Create & request quotes</Text>
+                <Text style={styles.btnPrimaryText}>Save draft</Text>
               )}
             </Pressable>
           </View>

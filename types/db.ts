@@ -12,7 +12,15 @@
 
 export type UserRole = 'buyer' | 'vendor' | 'admin';
 
-export type RequestStatus = 'pending_quote' | 'quoted' | 'ordered' | 'cancelled';
+/**
+ * 'draft' is the buyer's own workspace: saved, editable, invisible to
+ * every vendor. vendor_request_queue() filters on the two middle values,
+ * so nothing else needs to know about it.
+ *
+ * Requires bookshops_booklist_drafts.sql — book_requests_status_check
+ * rejects 'draft' until that has run.
+ */
+export type RequestStatus = 'draft' | 'pending_quote' | 'quoted' | 'ordered' | 'cancelled';
 
 export type QuoteStatus = 'draft' | 'sent' | 'accepted' | 'rejected' | 'withdrawn' | 'expired';
 
@@ -281,6 +289,14 @@ export interface BookRequestItem {
   id: string;
   request_id: string;
   title: string;
+  /**
+   * Author or publisher as it appeared on the school list.
+   *
+   * Optional on the type, not just nullable: builds that have not run
+   * bookshops_booklist_author.sql yet have no such column, so a select
+   * simply omits the key rather than returning null.
+   */
+  author?: string | null;
   category: ItemCategory;
   quantity: number;
   /** Null until a vendor has priced the line. */
@@ -391,8 +407,14 @@ export interface Booklist extends BookRequest {
   quotes: Quote[];
   order: Order | null;
   bucket: BooklistBucket;
-  /** Total item count, counting quantities. */
+  /** Total item count, counting quantities: three copies of one title is 3. */
   itemCount: number;
+  /**
+   * Number of LINES on the list — what the serial numbers in the card
+   * count up to. Distinct from itemCount, which counts copies: a list of
+   * 12 titles where one is ordered twice is lineCount 12, itemCount 13.
+   */
+  lineCount: number;
   /**
    * Best available money figure: the accepted quote if there is one,
    * otherwise the cheapest live quote, otherwise the sum of the line

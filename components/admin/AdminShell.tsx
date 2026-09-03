@@ -4,23 +4,46 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, radius, font, shadow } from '../../theme';
 import { useLayout } from '../../hooks/useLayout';
 
+/**
+ * Where an admin nav item goes. A union, so a link to a screen that does
+ * not exist is a compile error rather than an "Unmatched Route" tap.
+ *
+ * Dashboard points at `/admin` — the control centre that is actually
+ * built — not an empty `/admin/dashboard`. Settings points at the shared
+ * `/settings`, which already branches on role; a second admin-only
+ * settings screen would be two places to change one preference.
+ */
+export type AdminRoute =
+  | '/admin'
+  | '/admin/analytics'
+  | '/admin/vendors'
+  | '/admin/users'
+  | '/admin/booklists'
+  | '/admin/orders'
+  | '/admin/payments'
+  | '/admin/support'
+  | '/settings';
+
 export interface AdminNavItem {
   key: string;
   label: string;
   icon: keyof typeof Ionicons.glyphMap;
+  /** null for Logout, which is an action rather than a destination. */
+  route: AdminRoute | null;
   badge?: number;
 }
 
 export const ADMIN_NAV: AdminNavItem[] = [
-  { key: 'dashboard', label: 'Dashboard', icon: 'home-outline' },
-  { key: 'analytics', label: 'Platform Analytics', icon: 'bar-chart-outline' },
-  { key: 'vendors', label: 'Vendor Management', icon: 'storefront-outline' },
-  { key: 'users', label: 'User Management', icon: 'people-outline' },
-  { key: 'booklists', label: 'Booklist Hub', icon: 'bookmark-outline' },
-  { key: 'orders', label: 'Orders Overview', icon: 'receipt-outline' },
-  { key: 'support', label: 'Customer Support', icon: 'chatbubble-outline' },
-  { key: 'settings', label: 'Settings', icon: 'settings-outline' },
-  { key: 'logout', label: 'Logout', icon: 'log-out-outline' },
+  { key: 'dashboard', label: 'Dashboard', icon: 'home-outline', route: '/admin' },
+  { key: 'analytics', label: 'Platform Analytics', icon: 'bar-chart-outline', route: '/admin/analytics' },
+  { key: 'vendors', label: 'Vendor Management', icon: 'storefront-outline', route: '/admin/vendors' },
+  { key: 'users', label: 'User Management', icon: 'people-outline', route: '/admin/users' },
+  { key: 'booklists', label: 'Booklist Hub', icon: 'bookmark-outline', route: '/admin/booklists' },
+  { key: 'orders', label: 'Orders Overview', icon: 'receipt-outline', route: '/admin/orders' },
+  { key: 'payments', label: 'Financials & Payments', icon: 'wallet-outline', route: '/admin/payments' },
+  { key: 'support', label: 'Customer Support', icon: 'chatbubble-outline', route: '/admin/support' },
+  { key: 'settings', label: 'Settings', icon: 'settings-outline', route: '/settings' },
+  { key: 'logout', label: 'Logout', icon: 'log-out-outline', route: null },
 ];
 
 export function AdminTopBar({

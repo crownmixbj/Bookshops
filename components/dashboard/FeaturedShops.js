@@ -65,6 +65,7 @@ export function FeaturedShops({ shop, onViewShop, onSelectCategory }) {
         onPress={() => onViewShop?.(shop)}
         style={({ pressed }) => [styles.viewBtn, pressed && styles.viewBtnPressed]}
         accessibilityRole="button"
+        accessibilityLabel={`View details for ${shop?.store_name ?? 'this shop'}`}
       >
         <Text style={styles.viewBtnText}>View Shop Details</Text>
       </Pressable>

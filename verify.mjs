@@ -10,7 +10,11 @@ import { join, dirname, resolve, extname } from 'node:path';
 
 const ROOT = process.cwd();
 const SKIP = new Set(['node_modules', '.git', '.expo', 'dist', 'assets', '.claude']);
-const EXTS = ['', '.js', '.jsx', '.ts', '.tsx', '.json', '/index.js', '/index.jsx'];
+// '/index.ts' and '/index.tsx' matter: components/auth is imported as a
+// directory. Without them the check below fell back to the bare '' entry,
+// which matches the DIRECTORY itself — so a genuinely broken directory
+// import would have passed.
+const EXTS = ['', '.js', '.jsx', '.ts', '.tsx', '.json', '/index.js', '/index.jsx', '/index.ts', '/index.tsx'];
 
 function walk(dir, out = []) {
   for (const name of readdirSync(dir)) {
@@ -49,7 +53,12 @@ for (const file of files) {
     const spec = m[1];
     if (!spec.startsWith('.')) continue; // bare specifiers -> node_modules
     const base = resolve(dirname(file), spec);
-    if (!EXTS.some((ext) => existsSync(base + ext))) {
+    // isFile(), not existsSync(): a bare directory is not a module.
+    const resolves = EXTS.some((ext) => {
+      const candidate = base + ext;
+      return existsSync(candidate) && statSync(candidate).isFile();
+    });
+    if (!resolves) {
       resolveErrors++;
       console.log(`UNRESOLVED  ${file.replace(ROOT + '/', '')}  ->  ${spec}`);
     }
