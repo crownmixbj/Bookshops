@@ -29,9 +29,18 @@ function ItemRow({ item, checked, onToggle, isLast }) {
     <View style={[styles.itemRow, isLast && styles.itemRowLast]}>
       <Checkbox checked={checked} onToggle={onToggle} label={item.title} />
       <View style={styles.itemText}>
-        <Text style={styles.itemTitle} numberOfLines={2}>
-          {item.title}
-        </Text>
+        <View style={styles.itemTitleLine}>
+          {/* Same rule as the booklist hub: a badge only when there is
+              more than one copy, so the common row stays clean. */}
+          {item.quantity > 1 && (
+            <View style={styles.qty}>
+              <Text style={styles.qtyText}>{item.quantity}×</Text>
+            </View>
+          )}
+          <Text style={styles.itemTitle} numberOfLines={2}>
+            {item.title}
+          </Text>
+        </View>
         {!!item.author && (
           <Text style={styles.itemAuthor} numberOfLines={1}>
             {item.author}
@@ -266,7 +275,16 @@ const styles = StyleSheet.create({
   },
   itemRowLast: { borderBottomWidth: 0 },
   itemText: { flex: 1 },
-  itemTitle: { fontSize: font.md, color: colors.text },
+  itemTitleLine: { flexDirection: 'row', alignItems: 'flex-start', gap: 6 },
+  qty: {
+    backgroundColor: '#E4EAF5',
+    borderRadius: radius.sm,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    marginTop: 1,
+  },
+  qtyText: { fontSize: font.xs, fontWeight: '800', color: colors.navy },
+  itemTitle: { flex: 1, fontSize: font.md, color: colors.text },
   itemAuthor: { fontSize: font.sm, color: colors.textMuted, marginTop: 1 },
   itemRight: { alignItems: 'flex-end', gap: 3 },
   itemPrice: { fontSize: font.md, fontWeight: '700', color: colors.text },

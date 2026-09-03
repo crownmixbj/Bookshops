@@ -18,11 +18,13 @@ import { CreateSourceSheet, type BooklistSource } from '../../components/booklis
 import { BooklistReviewModal } from '../../components/booklists/BooklistReviewModal';
 import { EditBooklistModal } from '../../components/booklists/EditBooklistModal';
 import { ConfirmDialog } from '../../components/booklists/ConfirmDialog';
+import { DispatchModal } from '../../components/booklists/DispatchModal';
 import {
   pickBooklistImage,
   publishBookRequest,
   deleteBookRequest,
   describeBooklistError,
+  type Dispatch,
   type PickedImage,
 } from '../../lib/booklistUpload';
 
@@ -145,6 +147,8 @@ export default function BooklistsScreen() {
   const [deleting, setDeleting] = useState<Booklist | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [publishingId, setPublishingId] = useState<string | null>(null);
+  /** The list awaiting a routing choice. Null keeps DispatchModal unmounted. */
+  const [dispatchFor, setDispatchFor] = useState<Booklist | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   // The search box lives in the shell's top bar so its text survives
   // navigation; this screen just reads what was typed.
@@ -196,15 +200,21 @@ export default function BooklistsScreen() {
    * row was actually updated, so a policy refusal surfaces here as a
    * message rather than as a button that appears to work.
    */
-  async function handlePublish(booklist: Booklist) {
+  async function handlePublish(booklist: Booklist, dispatch: Dispatch) {
     setPublishingId(booklist.id);
     setActionError(null);
     try {
-      await publishBookRequest(booklist.id);
-      setFlash(`${booklist.school_name} is now with vendors. Quotes will appear here.`);
+      await publishBookRequest(booklist.id, dispatch);
+      setDispatchFor(null);
+      setFlash(
+        dispatch.type === 'direct'
+          ? `${booklist.school_name} was sent to that shop. Only they can see it.`
+          : `${booklist.school_name} is now with vendors. Quotes will appear here.`
+      );
       await reload();
     } catch (e) {
       setActionError(describeBooklistError(e));
+      setDispatchFor(null);
     } finally {
       setPublishingId(null);
     }
@@ -229,20 +239,12 @@ export default function BooklistsScreen() {
 
   const cardActions: CardActions = {
     onEdit: setEditing,
-    onPublish: handlePublish,
+    // Publish asks where first. Routing is not reversible once a vendor
+    // starts pricing, so it is a decision rather than a default.
+    onPublish: setDispatchFor,
     onDelete: setDeleting,
     publishingId,
   };
-
-  /**
-   * Only these routes exist as files today. The sidebar also lists My
-   * Orders, Saved Shops and Settings — pushing those would land the user
-   * on expo-router's "Unmatched Route" screen, so they are inert until
-   * their screens are built. typedRoutes is what surfaced this: it
-   * rejects a plain string that is not a real route.
-   */
-  const IMPLEMENTED = { dashboard: '/', booklists: '/booklists', orders: '/orders', saved: '/saved', settings: '/settings' } as const;
-
 
   const q = search.trim().toLowerCase();
   const filter = (list: Booklist[]) =>
@@ -280,6 +282,15 @@ export default function BooklistsScreen() {
         onClose={() => setEditing(null)}
         onSaved={handleSubmitted}
       />
+
+      {dispatchFor && (
+        <DispatchModal
+          schoolName={dispatchFor.school_name}
+          busy={publishingId === dispatchFor.id}
+          onCancel={() => setDispatchFor(null)}
+          onConfirm={(dispatch) => handlePublish(dispatchFor, dispatch)}
+        />
+      )}
 
       <ConfirmDialog
         visible={deleting !== null}

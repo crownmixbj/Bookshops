@@ -22,9 +22,6 @@ import type { OrderView } from '../../types/db';
 import { Footer } from '../../components/layout/Footer';
 import { useShell } from '../../components/layout/ShellContext';
 
-/** Routes that exist as files. The rest of the sidebar is inert. */
-const IMPLEMENTED = { dashboard: '/', booklists: '/booklists', orders: '/orders', saved: '/saved', settings: '/settings' } as const;
-
 interface SectionProps {
   title: string;
   caption: string;

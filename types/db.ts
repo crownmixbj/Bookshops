@@ -35,6 +35,19 @@ export type FulfillmentStatus =
 
 export type ItemCategory = 'textbook' | 'stationery' | 'uniform' | 'other';
 
+/**
+ * Who a published booklist reaches.
+ *
+ * 'open_market' — every approved, active vendor may quote it.
+ * 'direct'      — only target_vendor_id may see it at all. The queue RPC
+ *                 and requests_select_visible both enforce that; it is
+ *                 not a display preference.
+ *
+ * A CHECK keeps this in step with target_vendor_id: direct always names
+ * a shop, open_market never does. Requires bookshops_dispatch_routing.sql.
+ */
+export type DispatchType = 'open_market' | 'direct';
+
 export type ThemePreference = 'light' | 'dark' | 'system';
 
 export type VendorApprovalStatus = 'pending' | 'approved' | 'rejected';
@@ -62,6 +75,15 @@ export interface Profile {
   default_delivery_address: string | null;
   default_delivery_city: string | null;
   default_delivery_phone: string | null;
+  /**
+   * State, LGA and landmark — how an address is actually located and
+   * found here. Optional on the type, not just nullable: a build that
+   * has not run bookshops_delivery_address.sql has no such columns, so
+   * a select omits the keys rather than returning null.
+   */
+  default_delivery_state?: string | null;
+  default_delivery_lga?: string | null;
+  default_delivery_landmark?: string | null;
 
   notify_email_orders: boolean;
   notify_email_quotes: boolean;
@@ -90,6 +112,9 @@ export type EditableProfile = Pick<
   | 'phone_number'
   | 'default_delivery_address'
   | 'default_delivery_city'
+  | 'default_delivery_state'
+  | 'default_delivery_lga'
+  | 'default_delivery_landmark'
   | 'default_delivery_phone'
   | 'notify_email_orders'
   | 'notify_email_quotes'
@@ -274,8 +299,20 @@ export interface BookRequest {
   buyer_id: string;
   school_name: string;
   class_level: string;
-  /** Set when the buyer sent this list to one shop. Null = open request. */
+  /**
+   * Set when the buyer addressed this list to one shop. Null = open to
+   * the whole market. Always non-null when dispatch_type is 'direct',
+   * always null when it is 'open_market' — book_requests_dispatch_target_agree
+   * makes the other two combinations impossible to store.
+   */
   target_vendor_id: string | null;
+  /**
+   * Optional on the type, not just nullable: a build that has not run
+   * bookshops_dispatch_routing.sql has no such column, so a select
+   * omits the key rather than returning null. Read it as
+   * `?? 'open_market'`, which is what the column defaults to.
+   */
+  dispatch_type?: DispatchType;
   /** Legacy; never populated. Use image_path. */
   image_url: string | null;
   /** Object path in the `booklists` bucket. Sign it to display. */

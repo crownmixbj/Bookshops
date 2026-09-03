@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../../utils/supabase';
+import { routeBookRequest, directTo, describeBooklistError } from '../../lib/booklistUpload';
 import type { BookRequest, ShopView } from '../../types/db';
 import { colors, spacing, radius, font, shadow } from '../../theme';
 
@@ -26,11 +27,12 @@ interface Props {
  * "Request Quote" from a saved shop: pick one of the buyer's existing
  * booklists and address it to this vendor.
  *
- * Sets book_requests.target_vendor_id. The request stays visible to
- * every active vendor — requests_select_visible has not changed — so
- * this marks intent rather than restricting who may quote. Narrowing
- * visibility would need a policy change, and is worth a deliberate
- * decision rather than a side effect of this button.
+ * Routes the list to this shop alone: dispatch_type becomes 'direct'
+ * and target_vendor_id names the shop. After
+ * bookshops_dispatch_routing.sql that is enforced rather than advisory —
+ * vendor_request_queue() and requests_select_visible both drop a direct
+ * request from every other shop's view — so this button now genuinely
+ * takes the list off the open market.
  */
 export function SendBooklistModal({ visible, shop, userId, onClose, onSent, onCreateNew }: Props) {
   const [lists, setLists] = useState<BookRequest[]>([]);
@@ -74,16 +76,15 @@ export function SendBooklistModal({ visible, shop, userId, onClose, onSent, onCr
     setSendingId(list.id);
     setError(null);
     try {
-      const { error: e } = await supabase
-        .from('book_requests')
-        .update({ target_vendor_id: shop.id, updated_at: new Date().toISOString() })
-        .eq('id', list.id)
-        .eq('buyer_id', userId); // belt and braces; requests_update_own also enforces it
-      if (e) throw e;
+      // Via routeBookRequest, not a bare update: dispatch_type and
+      // target_vendor_id have to move together or
+      // book_requests_dispatch_target_agree rejects the write. RLS
+      // (requests_update_own) is what scopes it to this buyer.
+      await routeBookRequest(list.id, directTo(shop.id));
       setSentTo(list.id);
       onSent();
     } catch (e) {
-      setError(e as Error);
+      setError(new Error(describeBooklistError(e)));
     } finally {
       setSendingId(null);
     }

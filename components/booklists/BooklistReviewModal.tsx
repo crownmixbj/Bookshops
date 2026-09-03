@@ -24,6 +24,7 @@ import {
   type PickedImage,
   type ParsedItem,
 } from '../../lib/booklistUpload';
+import { QuantityStepper } from './QuantityStepper';
 import { colors, spacing, radius, font, shadow } from '../../theme';
 import { useLayout } from '../../hooks/useLayout';
 
@@ -387,6 +388,18 @@ export function BooklistReviewModal({ visible, userId, image, onClose, onSubmitt
                       style={[styles.rowInput, styles.rowAuthor]}
                       accessibilityLabel="Author or publisher"
                     />
+
+                    {/* Under the fields rather than beside them: on a
+                        phone a stepper in the same row as the title
+                        squeezes the title to a few characters. */}
+                    <View style={styles.rowMeta}>
+                      <QuantityStepper
+                        value={item.quantity}
+                        onChange={(quantity) => patchItem(item.id, { quantity })}
+                        label={item.title || 'this item'}
+                        disabled={!item.selected}
+                      />
+                    </View>
                   </View>
 
                   <Pressable
@@ -575,6 +588,7 @@ const styles = StyleSheet.create({
   },
   rowTitle: { fontSize: font.md, fontWeight: '600', minHeight: 34 },
   rowAuthor: { fontSize: font.sm, color: colors.textMuted },
+  rowMeta: { paddingHorizontal: spacing.sm, paddingTop: 6 },
   delete: { paddingTop: 8, paddingHorizontal: 2 },
 
   add: {

@@ -20,6 +20,7 @@ import {
   SaveButton,
   Note,
 } from '../../components/settings/SettingsControls';
+import { StatePicker } from '../../components/settings/StatePicker';
 
 import { useLayout } from '../../hooks/useLayout';
 import { useSettings, type SaveState } from '../../hooks/useSettings';
@@ -27,14 +28,6 @@ import { colors, spacing, radius, font } from '../../theme';
 import type { ThemePreference } from '../../types/db';
 import { Footer } from '../../components/layout/Footer';
 import { useShell } from '../../components/layout/ShellContext';
-
-const IMPLEMENTED = {
-  dashboard: '/',
-  booklists: '/booklists',
-  orders: '/orders',
-  saved: '/saved',
-  settings: '/settings',
-} as const;
 
 const MIN_PASSWORD = 8;
 
@@ -68,6 +61,9 @@ export default function SettingsScreen() {
   const [phone, setPhone] = useState('');
   const [address, setAddress] = useState('');
   const [city, setCity] = useState('');
+  const [deliveryState, setDeliveryState] = useState('');
+  const [lga, setLga] = useState('');
+  const [landmark, setLandmark] = useState('');
   const [deliveryPhone, setDeliveryPhone] = useState('');
   const [personalState, setPersonalState] = useState<SaveState>('idle');
 
@@ -113,6 +109,9 @@ export default function SettingsScreen() {
     setPhone(profile.phone_number ?? '');
     setAddress(profile.default_delivery_address ?? '');
     setCity(profile.default_delivery_city ?? '');
+    setDeliveryState(profile.default_delivery_state ?? '');
+    setLga(profile.default_delivery_lga ?? '');
+    setLandmark(profile.default_delivery_landmark ?? '');
     setDeliveryPhone(profile.default_delivery_phone ?? '');
   }, [profile]);
 
@@ -151,6 +150,9 @@ export default function SettingsScreen() {
         phone_number: phone.trim() || null,
         default_delivery_address: address.trim() || null,
         default_delivery_city: city.trim() || null,
+        default_delivery_state: deliveryState.trim() || null,
+        default_delivery_lga: lga.trim() || null,
+        default_delivery_landmark: landmark.trim() || null,
         default_delivery_phone: deliveryPhone.trim() || null,
       });
       // The header lives in AppShell, which never unmounts, so it will
@@ -287,10 +289,30 @@ export default function SettingsScreen() {
                       placeholder="14 Adeniyi Jones Avenue"
                     />
                     <Field
-                      label="City"
+                      label="City or town"
                       value={city}
                       onChangeText={setCity}
-                      placeholder="Ikeja, Lagos"
+                      placeholder="Ikeja"
+                    />
+                    <StatePicker
+                      label="State"
+                      value={deliveryState}
+                      onChange={setDeliveryState}
+                    />
+                    <Field
+                      label="Local Government Area"
+                      value={lga}
+                      onChangeText={setLga}
+                      placeholder="Ikeja LGA"
+                    />
+                    {/* The field that actually gets the parcel delivered.
+                        Outside the main estates an address here is found
+                        by landmark, not by street number. */}
+                    <Field
+                      label="Nearest landmark"
+                      value={landmark}
+                      onChangeText={setLandmark}
+                      placeholder="Opposite Ikeja City Mall"
                     />
                     <Field
                       label="Delivery phone"

@@ -3,11 +3,26 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, radius, font, shadow } from '../../theme';
 import { useLayout } from '../../hooks/useLayout';
 
+/**
+ * The buyer's navigation, in the order a booklist actually travels:
+ * see what is happening, work on your lists, track what you ordered,
+ * find a shop — then help, then settings.
+ *
+ * Dashboard is the index route `/`, not `/dashboard`. It is referenced
+ * as `/` in about eighteen places (every admin and vendor gate button,
+ * checkout, the back arrow on info pages), and moving it would leave `/`
+ * unmatched for the sake of a tidier string.
+ *
+ * Saved Shops is deliberately absent: it is a tab inside Bookshops now,
+ * because a shortlist of shops is a filter over the directory rather
+ * than a different place to be.
+ */
 export const NAV_ITEMS = [
   { key: 'dashboard', label: 'Dashboard', icon: 'home-outline', route: '/' },
   { key: 'booklists', label: 'My Booklists', icon: 'list-outline', route: '/booklists' },
   { key: 'orders', label: 'My Orders', icon: 'cart-outline', route: '/orders' },
-  { key: 'saved', label: 'Saved Shops', icon: 'bookmark-outline', route: '/saved' },
+  { key: 'shops', label: 'Bookshops', icon: 'storefront-outline', route: '/shops' },
+  { key: 'support', label: 'Help & Support', icon: 'help-buoy-outline', route: '/support' },
   { key: 'settings', label: 'Settings', icon: 'settings-outline', route: '/settings' },
   { key: 'logout', label: 'Logout', icon: 'log-out-outline', route: null, danger: true },
 ];

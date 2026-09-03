@@ -2,8 +2,18 @@ import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '../utils/supabase';
 import type { EditableProfile, EditableVendor, Profile, Vendor } from '../types/db';
 
+/**
+ * The state/LGA/landmark trio is listed separately so it can be dropped
+ * from the select when bookshops_delivery_address.sql has not been run.
+ * Naming a column that does not exist fails the WHOLE select, which
+ * would blank every settings form over three optional fields.
+ */
+const ADDRESS_COLUMNS = 'default_delivery_state, default_delivery_lga, default_delivery_landmark';
+
 const PROFILE_COLUMNS =
-  'id, full_name, phone_number, role, default_delivery_address, default_delivery_city, default_delivery_phone, notify_email_orders, notify_email_quotes, notify_push_orders, notify_push_quotes, notify_sms_orders, notify_sms_quotes, theme_preference, preferred_currency, created_at, updated_at';
+  `id, full_name, phone_number, role, default_delivery_address, default_delivery_city, default_delivery_phone, ${ADDRESS_COLUMNS}, notify_email_orders, notify_email_quotes, notify_push_orders, notify_push_quotes, notify_sms_orders, notify_sms_quotes, theme_preference, preferred_currency, created_at, updated_at`;
+
+const PROFILE_COLUMNS_LEGACY = PROFILE_COLUMNS.replace(`${ADDRESS_COLUMNS}, `, '');
 
 const VENDOR_COLUMNS =
   'id, profile_id, store_name, address, city, is_active, phone, email, verified_at, rating, review_count, completed_orders, created_at, updated_at';
@@ -48,11 +58,23 @@ export function useSettings() {
       setEmail(user.email ?? '');
       setEmailVerified(Boolean(user.email_confirmed_at ?? user.confirmed_at));
 
-      const { data, error: e } = await supabase
+      let { data, error: e } = await supabase
         .from('profiles')
         .select(PROFILE_COLUMNS)
         .eq('id', user.id)
         .maybeSingle();
+
+      // 42703 = undefined_column, PGRST204 = not in PostgREST's schema
+      // cache. Either way this project has not run
+      // bookshops_delivery_address.sql; retry without those columns so
+      // the rest of Settings still works.
+      if (e?.code === '42703' || e?.code === 'PGRST204') {
+        ({ data, error: e } = await supabase
+          .from('profiles')
+          .select(PROFILE_COLUMNS_LEGACY)
+          .eq('id', user.id)
+          .maybeSingle());
+      }
       if (e) throw e;
       setProfile((data ?? null) as Profile | null);
 

@@ -47,7 +47,13 @@ function activeKeyFor(pathname: string, role: ShellRole): string {
   if (pathname === '/') return 'dashboard';
   if (pathname.startsWith('/booklists')) return 'booklists';
   if (pathname.startsWith('/orders')) return 'orders';
-  if (pathname.startsWith('/saved')) return 'saved';
+  // Covers /shops and /shops/[id] alike, so a shop detail page keeps
+  // the directory highlighted rather than nothing.
+  if (pathname.startsWith('/shops')) return 'shops';
+  // /saved is now a redirect into /shops. It highlights Bookshops for
+  // the instant before the redirect lands, rather than flashing nothing.
+  if (pathname.startsWith('/saved')) return 'shops';
+  if (pathname.startsWith('/support')) return 'support';
   if (pathname.startsWith('/settings')) return 'settings';
   // An info or legal page: nothing in the sidebar is current, and
   // highlighting Dashboard would be a lie about where you are.
@@ -104,7 +110,14 @@ export function AppShell({ role, children }: { role: ShellRole; children: ReactN
     // union below is the set of routes it actually holds, and keeping it
     // written out means adding a nav entry for a screen that does not
     // exist still fails to compile.
-    const route = item.route as '/' | '/booklists' | '/orders' | '/saved' | '/settings' | null;
+    const route = item.route as
+      | '/'
+      | '/booklists'
+      | '/orders'
+      | '/shops'
+      | '/support'
+      | '/settings'
+      | null;
     if (route) router.push(route);
   }
 

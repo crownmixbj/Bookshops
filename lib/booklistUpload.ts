@@ -1,6 +1,6 @@
 import * as ImagePicker from 'expo-image-picker';
 import { supabase } from '../utils/supabase';
-import type { ItemCategory } from '../types/db';
+import type { DispatchType, ItemCategory } from '../types/db';
 
 export const BUCKET = 'booklists';
 
@@ -373,6 +373,42 @@ export function guessCategory(title: string): ItemCategory {
 export const DRAFT_STATUS = 'draft' as const;
 export const PUBLISHED_STATUS = 'pending_quote' as const;
 
+/**
+ * Where a published list is sent.
+ *
+ * The two fields travel together because the database insists they
+ * agree — book_requests_dispatch_target_agree rejects a direct request
+ * with no shop and an open one that names a shop. Passing them as one
+ * value makes the invalid pair hard to construct in the first place.
+ */
+export interface Dispatch {
+  type: DispatchType;
+  /** The shop's vendors.id. Required for 'direct', null otherwise. */
+  vendorId: string | null;
+}
+
+/** The default: every approved, active vendor may quote it. */
+export const OPEN_MARKET: Dispatch = { type: 'open_market', vendorId: null };
+
+/** Addressed to one shop, and visible to no other. */
+export function directTo(vendorId: string): Dispatch {
+  return { type: 'direct', vendorId };
+}
+
+/** The columns a dispatch writes, validated so the pair cannot disagree. */
+function dispatchColumns(dispatch: Dispatch) {
+  if (dispatch.type === 'direct' && !dispatch.vendorId) {
+    throw new Error('Choose a shop to send this booklist to.');
+  }
+  return {
+    dispatch_type: dispatch.type,
+    // Explicitly null, not omitted: switching a list back to the open
+    // market has to CLEAR the shop it was addressed to, or the constraint
+    // rejects the update and the list stays where it was.
+    target_vendor_id: dispatch.type === 'direct' ? dispatch.vendorId : null,
+  };
+}
+
 /** The header fields a buyer may edit on their own booklist. */
 export interface BooklistHeader {
   school_name: string;
@@ -459,7 +495,11 @@ export function blankEditableItem(): EditableItem {
  */
 export async function updateBookRequest(
   requestId: string,
-  header: BooklistHeader & { status?: typeof DRAFT_STATUS | typeof PUBLISHED_STATUS },
+  header: BooklistHeader & {
+    status?: typeof DRAFT_STATUS | typeof PUBLISHED_STATUS;
+    /** Only meaningful alongside a publish; ignored when saving a draft. */
+    dispatch?: Dispatch;
+  },
   items: EditableItem[]
 ): Promise<SaveResult> {
   const school = header.school_name.trim();
@@ -472,6 +512,11 @@ export async function updateBookRequest(
       school_name: school,
       class_level: header.class_level.trim(),
       ...(header.status ? { status: header.status } : {}),
+      // Routing is written in the same statement as the status, so a
+      // list can never be live in the queue with the wrong audience.
+      ...(header.status === PUBLISHED_STATUS && header.dispatch
+        ? dispatchColumns(header.dispatch)
+        : {}),
     })
     .eq('id', requestId)
     .select('id');
@@ -552,7 +597,10 @@ export async function updateBookRequest(
  * queue as a row with nothing to price, and the only thing they can do
  * with it is decline it — which costs the buyer a vendor.
  */
-export async function publishBookRequest(requestId: string): Promise<void> {
+export async function publishBookRequest(
+  requestId: string,
+  dispatch: Dispatch = OPEN_MARKET
+): Promise<void> {
   const { count, error: countError } = await supabase
     .from('book_request_items')
     .select('id', { count: 'exact', head: true })
@@ -565,12 +613,37 @@ export async function publishBookRequest(requestId: string): Promise<void> {
 
   const { data, error } = await supabase
     .from('book_requests')
-    .update({ status: PUBLISHED_STATUS })
+    .update({ status: PUBLISHED_STATUS, ...dispatchColumns(dispatch) })
     .eq('id', requestId)
     .select('id');
   if (error) throw error;
   if (!data?.length) {
     throw new Error('That booklist could not be published. It may have been deleted.');
+  }
+}
+
+/**
+ * Changes where an already-published list is sent, without touching its
+ * status.
+ *
+ * Separate from publishBookRequest because the two are different acts:
+ * publishing takes a draft live, whereas this re-routes something that
+ * is already live and may already be 'quoted'. Reusing publish here
+ * would drag such a list back to 'pending_quote' and lose that.
+ *
+ * Both columns move together — see dispatchColumns. Writing
+ * target_vendor_id on its own trips book_requests_dispatch_target_agree,
+ * which is exactly the mistake this function exists to prevent.
+ */
+export async function routeBookRequest(requestId: string, dispatch: Dispatch): Promise<void> {
+  const { data, error } = await supabase
+    .from('book_requests')
+    .update({ ...dispatchColumns(dispatch), updated_at: new Date().toISOString() })
+    .eq('id', requestId)
+    .select('id');
+  if (error) throw error;
+  if (!data?.length) {
+    throw new Error('That booklist could not be sent. It may have been deleted.');
   }
 }
 
@@ -620,11 +693,28 @@ export async function deleteBookRequest(requestId: string): Promise<void> {
  */
 export function describeBooklistError(error: unknown): string {
   const e = error as { code?: string; message?: string };
-  if (e?.code === '23514' && /status/i.test(e.message ?? '')) {
+  const message = e?.message ?? '';
+
+  // 23514 = check_constraint_violation, 42703 = undefined_column,
+  // PGRST204 = PostgREST cannot find the column in its schema cache.
+  // All three mean the same thing here: a migration has not been run.
+  const missingColumn = e?.code === '42703' || e?.code === 'PGRST204';
+
+  if (/dispatch_type/i.test(message) || /dispatch_target_agree/i.test(message)) {
+    if (missingColumn || e?.code === '23514') {
+      return (
+        'Sending to a specific shop is not enabled on this database yet. Run ' +
+        'bookshops_dispatch_routing.sql in the Supabase SQL editor.'
+      );
+    }
+  }
+
+  if (e?.code === '23514' && /status/i.test(message)) {
     return (
       'Drafts are not enabled on this database yet. Run bookshops_booklist_drafts.sql ' +
       'in the Supabase SQL editor — it adds "draft" to book_requests_status_check.'
     );
   }
-  return e?.message ?? String(error);
+
+  return message || String(error);
 }

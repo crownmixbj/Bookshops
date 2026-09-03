@@ -109,7 +109,10 @@ export function RequestQueue({
             </View>
             <Text style={styles.cardItems}>
               {row.item_count} item{row.item_count === 1 ? '' : 's'}
-              {row.is_targeted ? ' · sent to you' : ''}
+              {/* After bookshops_dispatch_routing.sql this is stronger
+                  than a preference: a direct request is in no other
+                  shop's queue at all. */}
+              {row.is_targeted ? ' · sent to you only' : ''}
             </Text>
             <Actions row={row} onView={onView} onDecline={onDecline} />
           </View>

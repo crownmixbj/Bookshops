@@ -62,20 +62,22 @@ function ItemRow({ item, serial }: { item: BookRequestItem; serial: number }) {
       <Text style={styles.itemSerial}>{serial}.</Text>
 
       <View style={{ flex: 1 }}>
-        <Text style={styles.itemTitle} numberOfLines={2}>
-          {item.title}
-        </Text>
+        <View style={styles.itemTitleLine}>
+          {/* Shown only when it is not 1. A column of "1×" against every
+              line is noise, and 1 is what the absence of a badge means.
+              A filled chip beside the bare serial keeps the two numbers
+              on this row from reading as one. */}
+          {item.quantity > 1 && (
+            <View style={styles.itemQty}>
+              <Text style={styles.itemQtyText}>{item.quantity}×</Text>
+            </View>
+          )}
+          <Text style={styles.itemTitle} numberOfLines={2}>
+            {item.title}
+          </Text>
+        </View>
         {item.parsed && <Text style={styles.itemParsed}>read from photo — check this line</Text>}
       </View>
-
-      {/* Only when it is not 1. A column of "1×" against every line is
-          noise, and it is the one case where the quantity could be
-          mistaken for the serial beside it. */}
-      {item.quantity > 1 && (
-        <View style={styles.itemQty}>
-          <Text style={styles.itemQtyText}>×{item.quantity}</Text>
-        </View>
-      )}
 
       <Text style={[styles.itemPrice, lineTotal == null && styles.itemPriceMuted]}>
         {lineTotal == null ? 'Not priced' : formatNaira(lineTotal)}
@@ -163,10 +165,15 @@ export function BooklistCard({
             {booklist.school_name || 'Untitled booklist'}
           </Text>
           <Text style={styles.meta} numberOfLines={1}>
-            {/* Lines, not copies. This number is what the serials count
-                up to, so the two cannot disagree; a line ordered twice
-                shows its own ×2 rather than inflating the total. */}
-            {[booklist.class_level, `${booklist.lineCount} item${booklist.lineCount === 1 ? '' : 's'}`]
+            {/* Lines first, because that is what the serial numbers
+                count up to — the two must never disagree. The copy
+                total is appended only when a line has more than one,
+                so the usual card stays short. */}
+            {[
+              booklist.class_level,
+              `${booklist.lineCount} item${booklist.lineCount === 1 ? '' : 's'}`,
+              booklist.itemCount !== booklist.lineCount ? `${booklist.itemCount} copies` : null,
+            ]
               .filter(Boolean)
               .join(' · ')}
           </Text>
@@ -181,6 +188,14 @@ export function BooklistCard({
             )}
             {liveQuotes > 0 && (
               <Chip label={`${liveQuotes} quote${liveQuotes === 1 ? '' : 's'}`} tone="info" />
+            )}
+            {/* Only the direct case earns a chip. Open market is the
+                default and the overwhelming majority, so badging it
+                would add a word to every card and distinguish nothing.
+                Undefined means this database has no dispatch_type column
+                yet, which reads as open market — the old behaviour. */}
+            {booklist.dispatch_type === 'direct' && (
+              <Chip label="Direct to one shop" tone="info" icon="storefront-outline" />
             )}
             {booklist.image_path && <Chip label="Photo attached" icon="image-outline" />}
           </View>
@@ -376,15 +391,18 @@ const styles = StyleSheet.create({
     minWidth: 24,
     paddingTop: 1,
   },
-  // A chip, where the serial is bare text. Same information density,
-  // deliberately different shape.
+  itemTitleLine: { flexDirection: 'row', alignItems: 'flex-start', gap: 6 },
+  // A filled chip, where the serial is bare faint text. Same information
+  // density, deliberately different shape, so "1." and "2×" sitting
+  // beside each other cannot be read as one number.
   itemQty: {
-    backgroundColor: colors.surfaceMuted,
+    backgroundColor: '#E4EAF5',
     borderRadius: radius.sm,
     paddingHorizontal: 6,
     paddingVertical: 2,
+    marginTop: 1,
   },
-  itemQtyText: { fontSize: font.xs, fontWeight: '700', color: colors.textMuted },
+  itemQtyText: { fontSize: font.xs, fontWeight: '800', color: colors.navy },
   itemTitle: { fontSize: font.md, color: colors.text },
   itemParsed: { fontSize: font.xs, color: colors.orangeDark, fontStyle: 'italic', marginTop: 1 },
   itemPrice: { fontSize: font.md, fontWeight: '700', color: colors.text },

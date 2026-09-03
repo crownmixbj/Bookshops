@@ -32,9 +32,25 @@ interface Props {
   onToggleSaved: (shop: ShopView) => void;
   /** Card width, so the grid can size cards to the container. */
   width?: number;
+  /**
+   * Label for the primary action. Saved Shops says "Request Quote";
+   * the Bookshops directory says "Send Booklist Direct", because there
+   * the press means routing this list to this shop alone.
+   */
+  quoteLabel?: string;
+  quoteIcon?: keyof typeof Ionicons.glyphMap;
 }
 
-export function ShopCard({ shop, saving, onView, onRequestQuote, onToggleSaved, width }: Props) {
+export function ShopCard({
+  shop,
+  saving,
+  onView,
+  onRequestQuote,
+  onToggleSaved,
+  width,
+  quoteLabel = 'Request Quote',
+  quoteIcon = 'pricetag-outline',
+}: Props) {
   return (
     <View style={[styles.card, width ? { width } : undefined]}>
       <View style={styles.head}>
@@ -115,8 +131,10 @@ export function ShopCard({ shop, saving, onView, onRequestQuote, onToggleSaved, 
           style={({ pressed }) => [styles.btn, styles.btnPrimary, pressed && styles.pressed]}
           accessibilityRole="button"
         >
-          <Ionicons name="pricetag-outline" size={15} color={colors.onNavy} />
-          <Text style={styles.btnPrimaryText}>Request Quote</Text>
+          <Ionicons name={quoteIcon} size={15} color={colors.onNavy} />
+          <Text style={styles.btnPrimaryText} numberOfLines={1}>
+            {quoteLabel}
+          </Text>
         </Pressable>
       </View>
     </View>

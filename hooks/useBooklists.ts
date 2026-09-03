@@ -98,14 +98,35 @@ export function useBooklists() {
       }
       setUserId(user.id);
 
-      const { data: requests, error: requestsError } = await supabase
-        .from('book_requests')
-        .select('id, buyer_id, school_name, class_level, image_url, image_path, status, created_at, updated_at')
-        .eq('buyer_id', user.id)
-        .order('created_at', { ascending: false });
+      const REQUEST_COLUMNS =
+        'id, buyer_id, school_name, class_level, image_url, image_path, target_vendor_id, dispatch_type, status, created_at, updated_at';
+
+      const readRequests = (columns: string) =>
+        supabase
+          .from('book_requests')
+          .select(columns)
+          .eq('buyer_id', user.id)
+          .order('created_at', { ascending: false });
+
+      let { data: requestRows, error: requestsError } = await readRequests(REQUEST_COLUMNS);
+
+      // 42703 = undefined_column, PGRST204 = not in PostgREST's schema
+      // cache. Either way bookshops_dispatch_routing.sql has not been
+      // run here, and naming dispatch_type fails the WHOLE select — which
+      // would blank the page over a badge. Retry without it.
+      if (requestsError?.code === '42703' || requestsError?.code === 'PGRST204') {
+        ({ data: requestRows, error: requestsError } = await readRequests(
+          REQUEST_COLUMNS.replace(', dispatch_type', '')
+        ));
+      }
       if (requestsError) throw requestsError;
 
-      const ids = (requests ?? []).map((r) => r.id);
+      // The two selects have different column lists, so their inferred
+      // row types differ; BookRequest is the shape both actually satisfy
+      // (dispatch_type is optional on it for exactly this reason).
+      const requests = (requestRows ?? []) as unknown as BookRequest[];
+
+      const ids = requests.map((r) => r.id);
       if (ids.length === 0) {
         setRaw({ ...EMPTY, requests: [] });
         return;
@@ -138,7 +159,7 @@ export function useBooklists() {
       if (ordersRes.error) throw ordersRes.error;
 
       setRaw({
-        requests: (requests ?? []) as BookRequest[],
+        requests,
         items: (itemsRes.data ?? []) as BookRequestItem[],
         quotes: (quotesRes.data ?? []) as unknown as Quote[],
         orders: (ordersRes.data ?? []) as Order[],

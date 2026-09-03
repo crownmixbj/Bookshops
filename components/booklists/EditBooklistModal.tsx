@@ -19,8 +19,12 @@ import {
   DRAFT_STATUS,
   PUBLISHED_STATUS,
   describeBooklistError,
+  OPEN_MARKET,
+  type Dispatch,
   type EditableItem,
 } from '../../lib/booklistUpload';
+import { DispatchModal } from './DispatchModal';
+import { QuantityStepper } from './QuantityStepper';
 import { colors, spacing, radius, font, shadow } from '../../theme';
 import { useLayout } from '../../hooks/useLayout';
 import type { Booklist } from '../../types/db';
@@ -57,6 +61,8 @@ export function EditBooklistModal({ booklist, onClose, onSaved }: Props) {
   const [pending, setPending] = useState<Pending>(null);
   const [error, setError] = useState<string | null>(null);
 
+  /** Open while the buyer is choosing where a publish should go. */
+  const [choosingDispatch, setChoosingDispatch] = useState(false);
   const [showPhoto, setShowPhoto] = useState(false);
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const [photoLoading, setPhotoLoading] = useState(false);
@@ -74,6 +80,7 @@ export function EditBooklistModal({ booklist, onClose, onSaved }: Props) {
     setItems(toEditableItems(booklist.items));
     setError(null);
     setPending(null);
+    setChoosingDispatch(false);
     setShowPhoto(false);
     setPhotoUrl(null);
   }, [booklist?.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -107,15 +114,29 @@ export function EditBooklistModal({ booklist, onClose, onSaved }: Props) {
   const filled = items.filter((i) => i.title.trim().length > 0);
   const canSave = Boolean(booklist) && school.trim().length > 0 && pending === null;
 
-  async function save(publish: boolean) {
+  /**
+   * Save & Send asks where before it writes anything.
+   *
+   * The empty check runs before the picker opens, not after: making
+   * someone choose a shop and only then telling them the list is empty
+   * wastes the one decision this screen asks them to make.
+   */
+  function startPublish() {
+    if (!canSave) return;
+    if (filled.length === 0) {
+      setError('Add at least one book before sending this list to vendors.');
+      return;
+    }
+    setError(null);
+    setChoosingDispatch(true);
+  }
+
+  async function save(publish: boolean, dispatch: Dispatch = OPEN_MARKET) {
     if (!canSave || !booklist) return;
     setPending(publish ? 'publish' : 'draft');
     setError(null);
 
     try {
-      // Publishing an empty list puts a row in every vendor's queue with
-      // nothing to price. Caught here so the buyer sees it beside the
-      // button rather than after a round trip.
       if (publish && filled.length === 0) {
         throw new Error('Add at least one book before sending this list to vendors.');
       }
@@ -129,18 +150,23 @@ export function EditBooklistModal({ booklist, onClose, onSaved }: Props) {
           // quietly pull it back out of vendors' queues while they are
           // part-way through pricing it.
           status: publish ? PUBLISHED_STATUS : isDraft ? DRAFT_STATUS : undefined,
+          dispatch: publish ? dispatch : undefined,
         },
         items
       );
 
+      setChoosingDispatch(false);
       await onSaved(
         publish
-          ? `Booklist sent to vendors — ${filled.length} item${filled.length === 1 ? '' : 's'}.`
+          ? dispatch.type === 'direct'
+            ? `Booklist sent to that shop — ${filled.length} item${filled.length === 1 ? '' : 's'}. Only they can see it.`
+            : `Booklist sent to vendors — ${filled.length} item${filled.length === 1 ? '' : 's'}.`
           : 'Changes saved.'
       );
       onClose();
     } catch (e) {
       setError(describeBooklistError(e));
+      setChoosingDispatch(false);
       setPending(null);
     }
   }
@@ -259,6 +285,14 @@ export function EditBooklistModal({ booklist, onClose, onSaved }: Props) {
                     style={[styles.rowInput, styles.rowAuthor]}
                     accessibilityLabel="Author or publisher"
                   />
+
+                  <View style={styles.rowMeta}>
+                    <QuantityStepper
+                      value={item.quantity}
+                      onChange={(quantity) => patchItem(item.key, { quantity })}
+                      label={item.title || 'this item'}
+                    />
+                  </View>
                 </View>
                 <Pressable
                   onPress={() => removeItem(item.key)}
@@ -317,7 +351,7 @@ export function EditBooklistModal({ booklist, onClose, onSaved }: Props) {
               )}
             </Pressable>
             <Pressable
-              onPress={() => save(true)}
+              onPress={startPublish}
               disabled={!canSave}
               style={({ pressed }) => [
                 styles.btn,
@@ -342,6 +376,17 @@ export function EditBooklistModal({ booklist, onClose, onSaved }: Props) {
           </View>
         </View>
       </View>
+
+      {/* Stacked on top of this modal rather than replacing its body:
+          cancelling returns the buyer to their edits, not to the hub. */}
+      {choosingDispatch && (
+        <DispatchModal
+          schoolName={school}
+          busy={pending === 'publish'}
+          onCancel={() => setChoosingDispatch(false)}
+          onConfirm={(dispatch) => save(true, dispatch)}
+        />
+      )}
     </Modal>
   );
 }
@@ -452,6 +497,7 @@ const styles = StyleSheet.create({
   },
   rowTitle: { fontSize: font.md, fontWeight: '600', minHeight: 34 },
   rowAuthor: { fontSize: font.sm, color: colors.textMuted },
+  rowMeta: { paddingHorizontal: spacing.sm, paddingTop: 6 },
   delete: { paddingTop: 8, paddingHorizontal: 2 },
 
   add: {

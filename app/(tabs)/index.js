@@ -97,18 +97,6 @@ export default function DashboardScreen() {
     };
   }, [activeRequests, selection]);
 
-  const handleNavigate = async (item) => {
-    if (item.key === 'logout') {
-      await supabase.auth.signOut(); // app/_layout.js redirects to /auth/login
-      return;
-    }
-    // Only these routes exist as files; the rest of the sidebar is inert
-    // until those screens are built.
-    const implemented = { booklists: '/booklists', orders: '/orders', saved: '/saved', settings: '/settings' };
-    const target = implemented[item.key];
-    if (target) router.push(target);
-  };
-
   const handleCreate = async () => {
     setSubmitting(true);
     try {
