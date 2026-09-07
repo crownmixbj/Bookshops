@@ -1,10 +1,27 @@
 import { useState } from 'react';
 import { View, Text, Pressable, Linking, ActivityIndicator, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import type { OrderView, TrackerStage } from '../../types/db';
+import type { OrderView, PaymentStatus, TrackerStage } from '../../types/db';
+import { SETTLED_PAYMENT_STATUSES } from '../../types/db';
 import { downloadInvoice } from '../../lib/invoice';
 import { colors, spacing, radius, font, shadow, formatNaira } from '../../theme';
 import { useLayout } from '../../hooks/useLayout';
+
+/**
+ * Raw enum names are for the database. A buyer reading "escrow_held"
+ * learns nothing; "In escrow" is the promise the product made them.
+ */
+const PAY_LABEL: Partial<Record<PaymentStatus, string>> = {
+  pending: 'Awaiting payment',
+  escrow_held: 'In escrow',
+  escrow_released: 'Released to shop',
+  paid: 'Paid',
+  failed: 'Payment failed',
+  refunded: 'Refunded',
+};
+
+/** Statuses that should read as good news rather than as a warning. */
+const PAID_LOOK = new Set<string>(SETTLED_PAYMENT_STATUSES);
 
 function shortDate(iso: string | null): string {
   if (!iso) return '';
@@ -162,18 +179,18 @@ export function OrderCard({ order, defaultExpanded = false, onDispute }: Props) 
           <View
             style={[
               styles.payPill,
-              order.payment_status === 'paid' && styles.payPillPaid,
+              PAID_LOOK.has(order.payment_status) && styles.payPillPaid,
               order.payment_status === 'failed' && styles.payPillFailed,
             ]}
           >
             <Text
               style={[
                 styles.payPillText,
-                order.payment_status === 'paid' && { color: colors.success },
+                PAID_LOOK.has(order.payment_status) && { color: colors.success },
                 order.payment_status === 'failed' && { color: colors.danger },
               ]}
             >
-              {order.payment_status}
+              {PAY_LABEL[order.payment_status] ?? order.payment_status}
             </Text>
           </View>
           <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={16} color={colors.textMuted} />

@@ -222,7 +222,7 @@ export function AdminProfileMenu({ visible, onClose }: Props) {
                 // The full log lives on the dashboard's activity feed;
                 // there is no dedicated /admin/logs route yet.
                 onClose();
-                router.push('/admin');
+                router.push('/admin/dashboard');
               }}
             />
             <Action icon="settings-outline" label="Admin settings" onPress={() => go('/settings')} />

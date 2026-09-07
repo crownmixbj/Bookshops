@@ -8,10 +8,16 @@ import { useLayout } from '../../hooks/useLayout';
  * pinned to the bottom of the viewport on tablet and mobile, where a
  * side column would squeeze the content too far.
  */
-export function OrderSummary({ total, itemCount, onCheckout, busy }) {
+/**
+ * `loading` exists because this bar has no empty state of its own: it
+ * always renders a naira figure, so before the first read finished it
+ * rendered whatever the (then substituted) data summed to. A dash is the
+ * honest thing to show while the answer is unknown.
+ */
+export function OrderSummary({ total, itemCount, onCheckout, busy, loading = false }) {
   const { summaryMode } = useLayout();
   const docked = summaryMode === 'dock';
-  const disabled = busy || total <= 0;
+  const disabled = busy || loading || total <= 0;
 
   const button = (
     <Pressable
@@ -23,7 +29,9 @@ export function OrderSummary({ total, itemCount, onCheckout, busy }) {
         pressed && !disabled && styles.payPressed,
       ]}
       accessibilityRole="button"
-      accessibilityLabel={`Proceed to secure payment, ${formatNaira(total)}`}
+      accessibilityLabel={
+        loading ? 'Working out your total' : `Proceed to secure payment, ${formatNaira(total)}`
+      }
     >
       <Ionicons name="lock-closed" size={14} color={colors.onNavy} />
       <Text style={styles.payText}>Proceed to Secure Payment</Text>
@@ -37,7 +45,7 @@ export function OrderSummary({ total, itemCount, onCheckout, busy }) {
           <Text style={styles.dockLabel}>
             Total{itemCount ? ` · ${itemCount} item${itemCount > 1 ? 's' : ''}` : ''}
           </Text>
-          <Text style={styles.dockTotal}>{formatNaira(total)}</Text>
+          <Text style={styles.dockTotal}>{loading ? '—' : formatNaira(total)}</Text>
         </View>
         <View style={styles.dockBtn}>{button}</View>
       </View>
@@ -51,11 +59,11 @@ export function OrderSummary({ total, itemCount, onCheckout, busy }) {
 
         <View style={styles.line}>
           <Text style={styles.lineLabel}>Items</Text>
-          <Text style={styles.lineValue}>{itemCount}</Text>
+          <Text style={styles.lineValue}>{loading ? '—' : itemCount}</Text>
         </View>
         <View style={styles.line}>
           <Text style={styles.lineLabel}>Subtotal</Text>
-          <Text style={styles.lineValue}>{formatNaira(total)}</Text>
+          <Text style={styles.lineValue}>{loading ? '—' : formatNaira(total)}</Text>
         </View>
         <View style={styles.line}>
           <Text style={styles.lineLabel}>Delivery</Text>
@@ -66,7 +74,7 @@ export function OrderSummary({ total, itemCount, onCheckout, busy }) {
 
         <View style={styles.line}>
           <Text style={styles.totalLabel}>Total</Text>
-          <Text style={styles.totalValue}>{formatNaira(total)}</Text>
+          <Text style={styles.totalValue}>{loading ? '—' : formatNaira(total)}</Text>
         </View>
 
         {button}

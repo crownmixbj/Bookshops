@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '../utils/supabase';
+import { pickPricingQuote, priceBooklistItems } from '../lib/booklistPricing';
+import type { PricedLineFields, Quote, QuoteItem } from '../types/db';
 
 /**
  * The three detail screens opened from the Booklist Hub, behind one
@@ -134,15 +136,19 @@ export function useShopDetail(vendorId: string | null) {
   return { shop, reviews, saved, loading, error, refresh: load, toggleSaved };
 }
 
-export interface BooklistItem {
+interface BooklistItemRow {
   id: string;
   title: string;
   category: string;
   quantity: number;
+  /** The request row's own price. Almost always null — see lib/booklistPricing. */
   unit_price: number | null;
   parsed: boolean;
   position: number;
 }
+
+/** A line with the pricing quote's numbers resolved onto it. */
+export type BooklistItem = BooklistItemRow & PricedLineFields;
 
 export interface BooklistQuote {
   id: string;
@@ -200,14 +206,30 @@ export function useBooklistDetail(requestId: string | null) {
         .order('total_price', { ascending: true }),
     ]);
 
-    setItems(itemRes.error ? [] : ((itemRes.data ?? []) as BooklistItem[]));
     // Drafts are the vendor's private working copy — a buyer must not
     // see a price that has not been sent to them.
-    setQuotes(
-      quoteRes.error
-        ? []
-        : ((quoteRes.data ?? []) as unknown as BooklistQuote[]).filter((q) => q.status !== 'draft')
-    );
+    const visibleQuotes = quoteRes.error
+      ? []
+      : ((quoteRes.data ?? []) as unknown as BooklistQuote[]).filter((q) => q.status !== 'draft');
+    setQuotes(visibleQuotes);
+
+    const rows = itemRes.error ? [] : ((itemRes.data ?? []) as BooklistItemRow[]);
+
+    // Line prices live on quote_items, not on the request rows. Without
+    // this read every line here showed a dash while the quotes below it
+    // carried real money.
+    const pricing = pickPricingQuote(visibleQuotes as unknown as Quote[]);
+    let quoteItems: QuoteItem[] = [];
+    if (pricing) {
+      const { data: qiData } = await supabase
+        .from('quote_items')
+        .select('id, quote_id, request_item_id, title, quantity, unit_price, is_available, position, created_at, updated_at')
+        .eq('quote_id', pricing.id)
+        .order('position', { ascending: true });
+      quoteItems = (qiData ?? []) as QuoteItem[];
+    }
+
+    setItems(priceBooklistItems(rows, quoteItems, pricing?.id ?? null));
     setLoading(false);
   }, [requestId]);
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '../utils/supabase';
+import { SETTLED_PAYMENT_STATUSES } from '../types/db';
 
 export interface VendorBank {
   bank_name: string;
@@ -70,7 +71,11 @@ export function useVendorDetail(vendorId: string | null) {
       setPerformance(null);
     } else {
       const orders = (orderRes.data ?? []) as { amount: number | null; payment_status: string; fulfillment_status: string }[];
-      const paid = orders.filter((o) => o.payment_status === 'paid');
+      // escrow_held counts: the buyer has paid. Whether the shop has
+      // been paid out is a separate question this panel does not answer.
+      const paid = orders.filter((o) =>
+        (SETTLED_PAYMENT_STATUSES as string[]).includes(o.payment_status)
+      );
       setPerformance({
         ordersCompleted: paid.filter((o) => o.fulfillment_status === 'delivered').length,
         revenue: paid

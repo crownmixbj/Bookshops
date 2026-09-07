@@ -13,7 +13,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 
 import { ShopCard } from '../../components/shops/ShopCard';
-import { SendBooklistModal } from '../../components/shops/SendBooklistModal';
 import { Footer } from '../../components/layout/Footer';
 import { useShell } from '../../components/layout/ShellContext';
 
@@ -42,7 +41,6 @@ export default function BookshopsScreen() {
   // shortlist of shops is a filter over the directory, not a different
   // place to be. /saved redirects in for anyone with the old bookmark.
   const [tab, setTab] = useState<'all' | 'saved'>('all');
-  const [quoteTarget, setQuoteTarget] = useState<ShopView | null>(null);
   const [gridWidth, setGridWidth] = useState<number | null>(null);
 
   const {
@@ -193,9 +191,6 @@ export default function BookshopsScreen() {
               saving={pending[shop.id]}
               onView={handleView}
               onToggleSaved={toggleSaved}
-              onRequestQuote={setQuoteTarget}
-              quoteLabel="Send Booklist Direct"
-              quoteIcon="send-outline"
             />
           ))}
         </View>
@@ -235,17 +230,6 @@ export default function BookshopsScreen() {
 
       <Footer />
 
-      <SendBooklistModal
-        visible={quoteTarget !== null}
-        shop={quoteTarget}
-        userId={userId}
-        onClose={() => setQuoteTarget(null)}
-        onSent={refresh}
-        onCreateNew={() => {
-          setQuoteTarget(null);
-          router.push('/booklists');
-        }}
-      />
     </ScrollView>
   );
 }

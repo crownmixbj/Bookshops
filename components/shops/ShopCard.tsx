@@ -28,31 +28,36 @@ interface Props {
   shop: ShopView;
   saving?: boolean;
   onView: (shop: ShopView) => void;
-  onRequestQuote: (shop: ShopView) => void;
   onToggleSaved: (shop: ShopView) => void;
   /** Card width, so the grid can size cards to the container. */
   width?: number;
-  /**
-   * Label for the primary action. Saved Shops says "Request Quote";
-   * the Bookshops directory says "Send Booklist Direct", because there
-   * the press means routing this list to this shop alone.
-   */
-  quoteLabel?: string;
-  quoteIcon?: keyof typeof Ionicons.glyphMap;
 }
 
-export function ShopCard({
-  shop,
-  saving,
-  onView,
-  onRequestQuote,
-  onToggleSaved,
-  width,
-  quoteLabel = 'Request Quote',
-  quoteIcon = 'pricetag-outline',
-}: Props) {
+/**
+ * One shop in the directory.
+ *
+ * The whole card is the control. It used to carry two buttons side by
+ * side — "View Shop" and "Send Booklist Direct" — which at three columns
+ * on a laptop left about nine characters for the second label, so it
+ * read "Send Booklis…". Sending a booklist is now reached from the shop's
+ * own page, where the buyer can see who they are dealing with and which
+ * of their lists is going, rather than from a tile in a grid.
+ *
+ * The bookmark sits outside the card's Pressable rather than inside it.
+ * Nesting the two works on iOS and Android, where the inner press wins
+ * the responder — but on react-native-web a click bubbles, so saving a
+ * shop would ALSO open it. Absolutely positioned, it is a sibling, and
+ * neither press can reach the other on any platform.
+ */
+export function ShopCard({ shop, saving, onView, onToggleSaved, width }: Props) {
   return (
-    <View style={[styles.card, width ? { width } : undefined]}>
+    <View style={[styles.wrap, width ? { width } : undefined]}>
+      <Pressable
+        onPress={() => onView(shop)}
+        style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}
+        accessibilityRole="button"
+        accessibilityLabel={`${shop.store_name}. Open this shop.`}
+      >
       <View style={styles.head}>
         <View style={styles.logo}>
           <Text style={styles.logoText}>
@@ -83,24 +88,9 @@ export function ShopCard({
           <Stars rating={shop.rating} />
         </View>
 
-        <Pressable
-          onPress={() => onToggleSaved(shop)}
-          disabled={saving}
-          hitSlop={8}
-          style={styles.starBtn}
-          accessibilityRole="button"
-          accessibilityLabel={shop.isSaved ? `Remove ${shop.store_name} from saved` : `Save ${shop.store_name}`}
-        >
-          {saving ? (
-            <ActivityIndicator size="small" color={colors.navy} />
-          ) : (
-            <Ionicons
-              name={shop.isSaved ? 'bookmark' : 'bookmark-outline'}
-              size={19}
-              color={shop.isSaved ? colors.orange : colors.textFaint}
-            />
-          )}
-        </Pressable>
+        {/* Spacer: the bookmark floats above this corner. Without it a
+            long shop name runs under the icon. */}
+        <View style={styles.bookmarkSpacer} />
       </View>
 
       <View style={styles.metrics}>
@@ -117,31 +107,52 @@ export function ShopCard({
         </View>
       </View>
 
-      <View style={styles.actions}>
-        <Pressable
-          onPress={() => onView(shop)}
-          style={({ pressed }) => [styles.btn, styles.btnGhost, pressed && styles.pressed]}
-          accessibilityRole="button"
+        {/*
+          Deliberately a View, not a Pressable.
+          The card above is already the button, and a real control here
+          would either fire twice on web (click bubbles) or announce a
+          second identical action to a screen reader. This is the visual
+          affordance for the press the whole card carries, so it is
+          hidden from assistive tech rather than duplicated to it.
+        */}
+        <View
+          style={styles.cta}
+          importantForAccessibility="no-hide-descendants"
+          accessibilityElementsHidden
         >
           <Ionicons name="storefront-outline" size={15} color={colors.navy} />
-          <Text style={styles.btnGhostText}>View Shop</Text>
-        </Pressable>
-        <Pressable
-          onPress={() => onRequestQuote(shop)}
-          style={({ pressed }) => [styles.btn, styles.btnPrimary, pressed && styles.pressed]}
-          accessibilityRole="button"
-        >
-          <Ionicons name={quoteIcon} size={15} color={colors.onNavy} />
-          <Text style={styles.btnPrimaryText} numberOfLines={1}>
-            {quoteLabel}
-          </Text>
-        </Pressable>
-      </View>
+          <Text style={styles.ctaText}>View Shop</Text>
+        </View>
+      </Pressable>
+
+      <Pressable
+        onPress={() => onToggleSaved(shop)}
+        disabled={saving}
+        hitSlop={10}
+        style={({ pressed }) => [styles.bookmark, pressed && styles.pressed]}
+        accessibilityRole="button"
+        accessibilityLabel={
+          shop.isSaved ? `Remove ${shop.store_name} from saved` : `Save ${shop.store_name}`
+        }
+      >
+        {saving ? (
+          <ActivityIndicator size="small" color={colors.navy} />
+        ) : (
+          <Ionicons
+            name={shop.isSaved ? 'bookmark' : 'bookmark-outline'}
+            size={19}
+            color={shop.isSaved ? colors.orange : colors.textFaint}
+          />
+        )}
+      </Pressable>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  // The positioning context for the bookmark, and where the grid's
+  // measured width lands.
+  wrap: { position: 'relative' },
   card: {
     backgroundColor: colors.surface,
     borderRadius: radius.lg,
@@ -150,6 +161,7 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
     ...shadow.card,
   },
+  cardPressed: { backgroundColor: colors.surfaceMuted, borderColor: colors.borderStrong },
   head: { flexDirection: 'row', gap: spacing.md },
   logo: {
     width: 44,
@@ -166,7 +178,16 @@ const styles = StyleSheet.create({
   stars: { flexDirection: 'row', alignItems: 'center', gap: 2, marginTop: 5 },
   ratingValue: { fontSize: font.xs, fontWeight: '700', color: colors.textMuted, marginLeft: 4 },
   noRating: { fontSize: font.xs, color: colors.textFaint, marginTop: 5, fontStyle: 'italic' },
-  starBtn: { padding: 2 },
+  bookmarkSpacer: { width: 26 },
+  bookmark: {
+    position: 'absolute',
+    top: spacing.md,
+    right: spacing.md,
+    width: 30,
+    height: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
   metrics: {
     flexDirection: 'row',
@@ -181,20 +202,21 @@ const styles = StyleSheet.create({
   metricValue: { fontSize: font.lg, fontWeight: '800', color: colors.navy },
   metricLabel: { fontSize: font.xs, color: colors.textMuted, marginTop: 1 },
 
-  actions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md },
-  btn: {
-    flex: 1,
+  // Full width, one action, so nothing has to be truncated at any
+  // column count.
+  cta: {
+    width: '100%',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
+    marginTop: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
     borderRadius: radius.md,
     paddingVertical: 10,
-    minHeight: 38,
+    minHeight: 40,
   },
-  btnGhost: { borderWidth: 1, borderColor: colors.border },
-  btnGhostText: { color: colors.navy, fontWeight: '700', fontSize: font.sm },
-  btnPrimary: { backgroundColor: colors.orange },
-  btnPrimaryText: { color: colors.onNavy, fontWeight: '700', fontSize: font.sm },
+  ctaText: { color: colors.navy, fontWeight: '700', fontSize: font.sm },
   pressed: { opacity: 0.85 },
 });

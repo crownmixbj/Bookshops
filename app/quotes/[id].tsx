@@ -115,13 +115,30 @@ export default function QuoteDetailScreen() {
             <Text style={styles.secondaryText}>View shop details</Text>
           </Pressable>
         )}
+        {/* The quote id is the whole point of this button: checkout
+            prices the charge from the quote, so without it there is
+            nothing to pay for. A quote that is no longer 'sent' has
+            been accepted, withdrawn or has expired — offering to pay
+            for it would fail at the server, so say so here instead. */}
         <Pressable
-          onPress={() => router.push('/checkout')}
-          style={({ pressed }) => [styles.cta, pressed && styles.ctaPressed]}
+          onPress={() => router.push({ pathname: '/checkout', params: { quote: quote.id } })}
+          disabled={quote.status !== 'sent'}
+          style={({ pressed }) => [
+            styles.cta,
+            pressed && styles.ctaPressed,
+            quote.status !== 'sent' && styles.ctaDisabled,
+          ]}
           accessibilityRole="button"
+          accessibilityLabel={`Accept this quote and pay ${formatNaira(quote.total_price)}`}
         >
           <Ionicons name="lock-closed" size={15} color={colors.onNavy} />
-          <Text style={styles.ctaText}>Accept and pay</Text>
+          <Text style={styles.ctaText}>
+            {quote.status === 'accepted'
+              ? 'Already accepted'
+              : quote.status === 'sent'
+                ? `Accept and pay ${formatNaira(quote.total_price)}`
+                : `Quote ${quote.status}`}
+          </Text>
         </Pressable>
       </View>
     </BuyerPage>
@@ -159,5 +176,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.xl, paddingVertical: 12, flexGrow: 1,
   },
   ctaPressed: { backgroundColor: colors.orangeDark },
+  ctaDisabled: { backgroundColor: colors.borderStrong },
   ctaText: { fontSize: font.md, fontWeight: '800', color: colors.onNavy },
 });

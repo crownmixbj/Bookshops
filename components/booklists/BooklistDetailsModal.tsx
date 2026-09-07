@@ -45,7 +45,7 @@ interface Props {
 }
 
 /**
- * Create-booklist flow: name the list, optionally attach a photo of it,
+* Booklist details form: name the list, optionally attach a photo of it,
  * then submit for quotes.
  *
  * Order of operations matters. The request row is inserted FIRST so the
@@ -54,7 +54,7 @@ interface Props {
  * upload and the parse are then best-effort: neither failing should
  * discard a booklist the user has already created.
  */
-export function CreateBooklistModal({
+export function BooklistDetailsModal({
   visible,
   userId,
   onClose,

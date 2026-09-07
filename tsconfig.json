@@ -11,5 +11,5 @@
     ".expo/types/**/*.ts",
     "expo-env.d.ts"
   ],
-  "exclude": ["node_modules", ".verify-export"]
+  "exclude": ["node_modules", ".verify-export", "supabase/functions"]
 }

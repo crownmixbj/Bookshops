@@ -5,6 +5,7 @@ import { colors, spacing, radius, font } from '../../theme';
 import { useLayout } from '../../hooks/useLayout';
 import { useShell } from './ShellContext';
 import { Footer } from './Footer';
+import { WorkspaceFooter } from './WorkspaceFooter';
 
 interface Props {
   icon: keyof typeof Ionicons.glyphMap;
@@ -44,7 +45,7 @@ export function RolePlaceholder({ icon, title, summary, audience }: Props) {
           signed in as a {role === 'admin' ? 'administrator' : role === 'vendor' ? 'bookshop' : 'buyer'}.
         </Text>
         <Pressable
-          onPress={() => router.replace(role === 'admin' ? '/admin' : role === 'vendor' ? '/vendor' : '/')}
+          onPress={() => router.replace(role === 'admin' ? '/admin/dashboard' : role === 'vendor' ? '/vendor' : '/')}
           style={({ pressed }) => [styles.gateBtn, pressed && styles.pressed]}
           accessibilityRole="button"
         >
@@ -76,7 +77,7 @@ export function RolePlaceholder({ icon, title, summary, audience }: Props) {
         </View>
 
         <Pressable
-          onPress={() => router.push(audience === 'vendor' ? '/vendor' : '/admin')}
+          onPress={() => router.push(audience === 'vendor' ? '/vendor' : '/admin/dashboard')}
           style={({ pressed }) => [styles.link, pressed && styles.pressed]}
           accessibilityRole="button"
         >
@@ -87,7 +88,10 @@ export function RolePlaceholder({ icon, title, summary, audience }: Props) {
         </Pressable>
       </View>
 
-      <Footer audience={audience} />
+      {/* Vendor screens are a workspace, not a shopfront — one line
+          rather than the marketplace sitemap. Admin keeps the full
+          footer for now; switching it is the same one-line change. */}
+      {audience === 'vendor' ? <WorkspaceFooter /> : <Footer audience={audience} />}
     </ScrollView>
   );
 }

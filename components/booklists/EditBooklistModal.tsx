@@ -25,6 +25,13 @@ import {
 } from '../../lib/booklistUpload';
 import { DispatchModal } from './DispatchModal';
 import { QuantityStepper } from './QuantityStepper';
+import {
+  AUTHOR_PLACEHOLDER,
+  AUTHOR_REQUIRED_MESSAGE,
+  authorRequiredFor,
+  lineProblem,
+  validateLines,
+} from '../../lib/booklistValidation';
 import { colors, spacing, radius, font, shadow } from '../../theme';
 import { useLayout } from '../../hooks/useLayout';
 import type { Booklist } from '../../types/db';
@@ -64,6 +71,8 @@ export function EditBooklistModal({ booklist, onClose, onSaved }: Props) {
   /** Open while the buyer is choosing where a publish should go. */
   const [choosingDispatch, setChoosingDispatch] = useState(false);
   const [showPhoto, setShowPhoto] = useState(false);
+  /** Per-line errors appear only once they have tried to save. */
+  const [showProblems, setShowProblems] = useState(false);
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const [photoLoading, setPhotoLoading] = useState(false);
 
@@ -112,7 +121,29 @@ export function EditBooklistModal({ booklist, onClose, onSaved }: Props) {
   }
 
   const filled = items.filter((i) => i.title.trim().length > 0);
+  const verdict = validateLines(items, (i) => i.key);
+  const blocked = new Set(verdict.missingAuthor);
   const canSave = Boolean(booklist) && school.trim().length > 0 && pending === null;
+
+  /**
+   * Every line has to name its author before this list moves.
+   *
+   * Returns false and lights up the offending rows, so the buyer is
+   * looking at the field that needs them rather than at a banner.
+   */
+  function linesPass(): boolean {
+    if (filled.length === 0) {
+      setError('Add at least one book before sending this list to vendors.');
+      return false;
+    }
+    if (!verdict.ok) {
+      setShowProblems(true);
+      setError(verdict.message);
+      return false;
+    }
+    setShowProblems(false);
+    return true;
+  }
 
   /**
    * Save & Send asks where before it writes anything.
@@ -123,23 +154,23 @@ export function EditBooklistModal({ booklist, onClose, onSaved }: Props) {
    */
   function startPublish() {
     if (!canSave) return;
-    if (filled.length === 0) {
-      setError('Add at least one book before sending this list to vendors.');
-      return;
-    }
+    if (!linesPass()) return;
     setError(null);
     setChoosingDispatch(true);
   }
 
   async function save(publish: boolean, dispatch: Dispatch = OPEN_MARKET) {
     if (!canSave || !booklist) return;
+
+    // A saved draft is a work in progress and may legitimately be
+    // half-typed; a list going to vendors may not. Checked before
+    // `pending` is set so a refusal does not leave a spinner behind.
+    if (publish && !linesPass()) return;
+
     setPending(publish ? 'publish' : 'draft');
     setError(null);
 
     try {
-      if (publish && filled.length === 0) {
-        throw new Error('Add at least one book before sending this list to vendors.');
-      }
 
       await updateBookRequest(
         booklist.id,
@@ -259,13 +290,23 @@ export function EditBooklistModal({ booklist, onClose, onSaved }: Props) {
               </Text>
             </View>
 
+            <Text style={styles.itemsHint}>
+              Give the author or publisher for each book — it is what tells a shop which edition
+              to quote.
+            </Text>
+
             {items.length === 0 && (
               <Text style={styles.empty}>
                 Nothing on this list yet. Add the books and vendors will price them.
               </Text>
             )}
 
-            {items.map((item) => (
+            {items.map((item) => {
+              const needsAuthor = authorRequiredFor(item);
+              const authorMissing = showProblems && blocked.has(item.key);
+              const titleMissing = showProblems && lineProblem(item) === 'title';
+
+              return (
               <View key={item.key} style={styles.row}>
                 <View style={styles.rowFields}>
                   <TextInput
@@ -273,18 +314,27 @@ export function EditBooklistModal({ booklist, onClose, onSaved }: Props) {
                     onChangeText={(title) => patchItem(item.key, { title })}
                     placeholder="Book or item title"
                     placeholderTextColor={colors.textFaint}
-                    style={[styles.rowInput, styles.rowTitle]}
+                    style={[styles.rowInput, styles.rowTitle, titleMissing && styles.rowInputInvalid]}
                     multiline
                     accessibilityLabel="Title"
                   />
                   <TextInput
                     value={item.author}
                     onChangeText={(author) => patchItem(item.key, { author })}
-                    placeholder="Author or publisher (optional)"
-                    placeholderTextColor={colors.textFaint}
-                    style={[styles.rowInput, styles.rowAuthor]}
-                    accessibilityLabel="Author or publisher"
+                    placeholder={AUTHOR_PLACEHOLDER}
+                    placeholderTextColor={authorMissing ? colors.danger : colors.textFaint}
+                    style={[styles.rowInput, styles.rowAuthor, authorMissing && styles.rowInputInvalid]}
+                    accessibilityLabel={
+                      needsAuthor ? 'Author or publisher, required' : 'Author or publisher'
+                    }
+                    accessibilityHint={
+                      needsAuthor ? 'Shops need this to quote the right edition' : undefined
+                    }
                   />
+                  {authorMissing && <Text style={styles.rowError}>{AUTHOR_REQUIRED_MESSAGE}</Text>}
+                  {titleMissing && (
+                    <Text style={styles.rowError}>Give this line a title, or remove it.</Text>
+                  )}
 
                   <View style={styles.rowMeta}>
                     <QuantityStepper
@@ -304,7 +354,8 @@ export function EditBooklistModal({ booklist, onClose, onSaved }: Props) {
                   <Ionicons name="trash-outline" size={18} color={colors.danger} />
                 </Pressable>
               </View>
-            ))}
+              );
+            })}
 
             <Pressable
               onPress={addItem}
@@ -496,6 +547,9 @@ const styles = StyleSheet.create({
     borderRadius: radius.sm,
   },
   rowTitle: { fontSize: font.md, fontWeight: '600', minHeight: 34 },
+  rowInputInvalid: { borderColor: colors.danger, backgroundColor: '#FDECEA' },
+  rowError: { fontSize: font.xs, color: colors.danger, marginTop: 3, lineHeight: 15 },
+  itemsHint: { fontSize: font.xs, color: colors.textMuted, lineHeight: 16, marginBottom: spacing.sm },
   rowAuthor: { fontSize: font.sm, color: colors.textMuted },
   rowMeta: { paddingHorizontal: spacing.sm, paddingTop: 6 },
   delete: { paddingTop: 8, paddingHorizontal: 2 },

@@ -13,23 +13,21 @@ import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 
 import { BooklistCard } from '../../components/booklists/BooklistCard';
-import { CreateBooklistModal } from '../../components/booklists/CreateBooklistModal';
-import { CreateSourceSheet, type BooklistSource } from '../../components/booklists/CreateSourceSheet';
+import { CreateBooklistModal } from '../../components/CreateBooklistModal';
 import { BooklistReviewModal } from '../../components/booklists/BooklistReviewModal';
 import { EditBooklistModal } from '../../components/booklists/EditBooklistModal';
 import { ConfirmDialog } from '../../components/booklists/ConfirmDialog';
 import { DispatchModal } from '../../components/booklists/DispatchModal';
 import {
-  pickBooklistImage,
   publishBookRequest,
   deleteBookRequest,
   describeBooklistError,
   type Dispatch,
-  type PickedImage,
 } from '../../lib/booklistUpload';
 
 import { useLayout } from '../../hooks/useLayout';
 import { useBooklists } from '../../hooks/useBooklists';
+import { useCreateBooklist } from '../../hooks/useCreateBooklist';
 import { supabase } from '../../utils/supabase';
 import { colors, spacing, radius, font, shadow } from '../../theme';
 import type { Booklist } from '../../types/db';
@@ -134,13 +132,10 @@ function Section({
  */
 export default function BooklistsScreen() {
   const { isMobile, contentPadding } = useLayout();
-  // Three steps, three pieces of state: choose a source, hand a photo to
-  // the review modal, or fall back to typing it in.
-  const [choosing, setChoosing] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const [reviewImage, setReviewImage] = useState<PickedImage | null>(null);
+  // The create flow, shared with the Booklist Hub so both screens offer
+  // the same three choices and land in the same place.
+  const create = useCreateBooklist();
   const [flash, setFlash] = useState<string | null>(null);
-  const [pickError, setPickError] = useState<string | null>(null);
 
   // Edit / publish / delete on an existing list.
   const [editing, setEditing] = useState<Booklist | null>(null);
@@ -154,44 +149,16 @@ export default function BooklistsScreen() {
   // navigation; this screen just reads what was typed.
   const { search } = useShell();
 
-  const { sections, userId, loading, refreshing, error, refresh, reload } = useBooklists();
-
-  /**
-   * What the buyer picked in the action sheet.
-   *
-   * The sheet is dismissed BEFORE the picker is launched. On iOS a
-   * native image picker presented from underneath an open Modal is
-   * simply never shown — no error, no camera, nothing — so the order
-   * here is load-bearing, not cosmetic.
-   */
-  async function handleSource(source: BooklistSource) {
-    setChoosing(false);
-    setPickError(null);
-
-    if (source === 'manual') {
-      setReviewImage(null);
-      setCreating(true);
-      return;
-    }
-
-    try {
-      const picked = await pickBooklistImage(source);
-      // Null covers both a cancel and a declined permission. A cancel
-      // should leave the buyer where they were; a refusal needs a word,
-      // but pickBooklistImage cannot tell us which happened, so this
-      // stays silent and the button is still there to press.
-      if (!picked) return;
-      setReviewImage(picked);
-    } catch (e) {
-      setPickError((e as Error).message);
-    }
-  }
+  const { sections, userId, loading, refreshing, error, refresh, revalidate } = useBooklists();
 
   /** Shown after a booklist is created or changed, once its modal has closed. */
   async function handleSubmitted(message: string) {
     setFlash(message);
     setActionError(null);
-    await reload();
+    // Background, not a reload: these cards are already showing the
+    // booklists they need to. Throwing them back to a skeleton because
+    // a NEW one was created is the bug, not the loading indicator.
+    await revalidate();
   }
 
   /**
@@ -211,7 +178,7 @@ export default function BooklistsScreen() {
           ? `${booklist.school_name} was sent to that shop. Only they can see it.`
           : `${booklist.school_name} is now with vendors. Quotes will appear here.`
       );
-      await reload();
+      await revalidate();
     } catch (e) {
       setActionError(describeBooklistError(e));
       setDispatchFor(null);
@@ -228,7 +195,7 @@ export default function BooklistsScreen() {
       await deleteBookRequest(deleting.id);
       setFlash(`Deleted the booklist for ${deleting.school_name}.`);
       setDeleting(null);
-      await reload();
+      await revalidate();
     } catch (e) {
       setActionError(describeBooklistError(e));
       setDeleting(null);
@@ -263,17 +230,21 @@ export default function BooklistsScreen() {
   return (
     <>
 
-      <CreateSourceSheet
-        visible={choosing}
-        onClose={() => setChoosing(false)}
-        onPick={handleSource}
+      <CreateBooklistModal
+        visible={create.choosing}
+        onClose={create.close}
+        onPick={create.onPick}
+        onDismissed={create.onDismissed}
+        title={create.title}
+        onTitleChange={create.setTitle}
       />
 
       <BooklistReviewModal
-        visible={reviewImage !== null}
+        visible={create.image !== null}
         userId={userId}
-        image={reviewImage}
-        onClose={() => setReviewImage(null)}
+        image={create.image}
+        initialSchool={create.title}
+        onClose={create.clearImage}
         onSubmitted={handleSubmitted}
       />
 
@@ -309,16 +280,6 @@ export default function BooklistsScreen() {
         onCancel={() => setDeleting(null)}
       />
 
-      <CreateBooklistModal
-        visible={creating}
-        userId={userId}
-        onClose={() => setCreating(false)}
-        // Wrapped, not passed straight through: reload's own first
-        // argument is { isRefresh }, and onCreated now hands over a
-        // note string, which would land in the wrong parameter.
-        onCreated={(note) => handleSubmitted(note ?? 'Booklist created.')}
-      />
-
         <ScrollView
           style={styles.scroll}
           contentContainerStyle={[styles.scrollContent, { padding: contentPadding }]}
@@ -335,7 +296,7 @@ export default function BooklistsScreen() {
               </Text>
             </View>
             <Pressable
-              onPress={() => setChoosing(true)}
+              onPress={create.open}
               style={({ pressed }) => [styles.create, pressed && styles.pressed]}
               accessibilityRole="button"
               accessibilityLabel="Create a new booklist"
@@ -355,11 +316,11 @@ export default function BooklistsScreen() {
             </View>
           )}
 
-          {pickError && (
+          {create.error && (
             <View style={styles.errorBox}>
               <Ionicons name="alert-circle" size={16} color={colors.danger} />
-              <Text style={styles.errorText}>{pickError}</Text>
-              <Pressable onPress={() => setPickError(null)} hitSlop={6} accessibilityLabel="Dismiss">
+              <Text style={styles.errorText}>{create.error}</Text>
+              <Pressable onPress={create.clearError} hitSlop={6} accessibilityLabel="Dismiss">
                 <Text style={styles.retry}>Dismiss</Text>
               </Pressable>
             </View>
@@ -393,7 +354,7 @@ export default function BooklistsScreen() {
             <>
               <Section
                 title="Active"
-                caption="Quoted or ordered — waiting on you or on a vendor"
+                caption="Quoted and waiting on you to choose a shop"
                 icon="flash-outline"
                 booklists={filter(sections.active)}
                 defaultExpanded
@@ -410,7 +371,7 @@ export default function BooklistsScreen() {
               />
               <Section
                 title="Archived"
-                caption="Delivered or cancelled"
+                caption="Ordered, delivered or cancelled — tracked on My Orders"
                 icon="archive-outline"
                 booklists={filter(sections.archived)}
                 collapsible

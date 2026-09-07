@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../utils/supabase';
 import type {
   Booklist,
@@ -8,8 +8,18 @@ import type {
   BookRequestItem,
   ItemCategory,
   Order,
+  PricedBooklistItem,
   Quote,
+  QuoteItem,
 } from '../types/db';
+import { getSessionUserId, subscribeToAuthReloads } from '../lib/loadState';
+import {
+  hasQuotedLines,
+  pickPricingQuote,
+  priceBooklistItems,
+  sumLineTotals,
+  totalsAgree,
+} from '../lib/booklistPricing';
 
 /**
  * Loads every booklist belonging to the signed-in buyer, with its items,
@@ -35,16 +45,18 @@ interface RawState {
   requests: BookRequest[];
   items: BookRequestItem[];
   quotes: Quote[];
+  /** Vendor line prices for every quote above. This is where money lives. */
+  quoteItems: QuoteItem[];
   orders: Order[];
 }
 
-const EMPTY: RawState = { requests: [], items: [], quotes: [], orders: [] };
+const EMPTY: RawState = { requests: [], items: [], quotes: [], quoteItems: [], orders: [] };
 
 /**
  * Which section a request belongs in.
- *   archived  finished or abandoned — nothing left to do
+ *   archived  finished, abandoned, or now an order — nothing to do here
  *   draft     still being edited, or published with no quote back yet
- *   active    quoted or ordered — awaiting a decision or a delivery
+ *   active    quoted — awaiting a decision from the buyer
  */
 function bucketFor(request: BookRequest, quotes: Quote[], order: Order | null): BooklistBucket {
   if (request.status === 'cancelled') return 'archived';
@@ -52,28 +64,46 @@ function bucketFor(request: BookRequest, quotes: Quote[], order: Order | null): 
   // below: a draft has no quotes by construction, and saying so here is
   // what makes "Drafts & pending" mean something.
   if (request.status === 'draft') return 'draft';
-  if (order && (order.fulfillment_status === 'delivered' || order.fulfillment_status === 'cancelled')) {
-    return 'archived';
-  }
-  if (request.status === 'ordered') return 'active';
+
+  // Ordered lists leave Active whatever stage the delivery is at.
+  //
+  // "Active" on this page means a booklist still needing a decision from
+  // the buyer, and an ordered one does not: it has been paid for, and My
+  // Orders is the screen that tracks what happens next. Keeping it here
+  // put the same purchase in two places, one of which could do nothing
+  // with it. It moves to Archived rather than disappearing, so the list
+  // itself is still readable from the page that owns booklists.
+  if (request.status === 'ordered' || order) return 'archived';
+
   const liveQuotes = quotes.filter((q) => q.status === 'sent' || q.status === 'accepted');
   return liveQuotes.length > 0 ? 'active' : 'draft';
 }
 
-function groupItems(items: BookRequestItem[]): BooklistItemGroup[] {
+function groupItems(items: PricedBooklistItem[]): BooklistItemGroup[] {
   return CATEGORY_ORDER.map((category) => {
     const inGroup = items.filter((i) => i.category === category);
     return {
       category,
       items: inGroup,
-      subtotal: inGroup.reduce(
-        (sum, i) => sum + (i.unit_price ?? 0) * i.quantity,
-        0
-      ),
-      unpricedCount: inGroup.filter((i) => i.unit_price == null).length,
+      subtotal: sumLineTotals(inGroup),
+      // Out-of-stock lines are answered, not pending, so they are not
+      // counted as awaiting a price.
+      unpricedCount: inGroup.filter((i) => i.isAvailable && i.lineTotal == null).length,
     };
   }).filter((g) => g.items.length > 0);
 }
+
+/**
+ * How a load announces itself.
+ *   initial     first paint — skeletons are correct here
+ *   refresh     pull-to-refresh — the platform spinner, no skeletons
+ *   background  a revalidate after a write — nothing moves, the rows
+ *               just change underneath. This is what a newly created
+ *               booklist triggers, so the cards already on screen are
+ *               never thrown back to a skeleton for a list they are
+ *               still perfectly able to show.
+ */
+export type LoadMode = 'initial' | 'refresh' | 'background';
 
 export function useBooklists() {
   const [raw, setRaw] = useState<RawState>(EMPTY);
@@ -82,24 +112,48 @@ export function useBooklists() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
-  const load = useCallback(async ({ isRefresh = false } = {}) => {
-    isRefresh ? setRefreshing(true) : setLoading(true);
+  /**
+   * Which load is the current one.
+   *
+   * Loads overlap — a pull-to-refresh lands on top of a post-create
+   * revalidate, an auth event lands on top of both. Without this, a slow
+   * earlier run could finish last and both clobber the newer data and
+   * flip the spinners for a request nobody is waiting on any more.
+   */
+  const runId = useRef(0);
+  /** Set on unmount so a load in flight stops touching state. */
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+
+  const load = useCallback(async ({ mode = 'initial' as LoadMode } = {}) => {
+    const run = ++runId.current;
+    const current = () => alive.current && runId.current === run;
+
+    if (mode === 'refresh') setRefreshing(true);
+    else if (mode === 'initial') setLoading(true);
     setError(null);
+
     try {
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
-      if (userError) throw userError;
-      if (!user) {
+      const uid = await getSessionUserId();
+      if (!current()) return;
+      if (!uid) {
         setUserId(null);
         setRaw(EMPTY);
         return;
       }
-      setUserId(user.id);
+      setUserId(uid);
+      const user = { id: uid };
 
+      // target_vendor is an embed on book_requests_target_vendor_id_fkey.
+      // Without it the card knew only an opaque uuid, so a list sent to
+      // one shop could not name the shop it was sent to.
       const REQUEST_COLUMNS =
-        'id, buyer_id, school_name, class_level, image_url, image_path, target_vendor_id, dispatch_type, status, created_at, updated_at';
+        'id, buyer_id, school_name, class_level, image_url, image_path, target_vendor_id, dispatch_type, status, created_at, updated_at, target_vendor:vendors!book_requests_target_vendor_id_fkey ( id, store_name, city, is_active )';
 
       const readRequests = (columns: string) =>
         supabase
@@ -119,6 +173,16 @@ export function useBooklists() {
           REQUEST_COLUMNS.replace(', dispatch_type', '')
         ));
       }
+
+      // PGRST200 = PostgREST cannot find the relationship. The FK is
+      // there, but its schema cache may not have caught up after DDL.
+      // Dropping the embed costs the shop's NAME on the badge; keeping
+      // it would cost the entire booklists page.
+      if (requestsError?.code === 'PGRST200') {
+        ({ data: requestRows, error: requestsError } = await readRequests(
+          REQUEST_COLUMNS.slice(0, REQUEST_COLUMNS.indexOf(', target_vendor:'))
+        ));
+      }
       if (requestsError) throw requestsError;
 
       // The two selects have different column lists, so their inferred
@@ -132,15 +196,20 @@ export function useBooklists() {
         return;
       }
 
+      // `author` is what tells a shop which edition to quote, and it was
+      // simply not being selected — the column exists and the forms
+      // require it, but every card showed a bare title. Named here, with
+      // the same retry the rest of this file uses for a column a project
+      // may not have migrated yet.
+      const ITEM_COLUMNS =
+        'id, request_id, title, author, category, quantity, unit_price, parsed, position, created_at, updated_at';
+
       // Three scoped reads rather than one deep embed: a failure in any
       // one of them then names the table it came from.
       const [itemsRes, quotesRes, ordersRes] = await Promise.all([
         supabase
           .from('book_request_items')
-          // TODO: add `author` here once bookshops_booklist_author.sql has
-          // been run. Naming a column that does not exist fails the whole
-          // select, which would blank the page rather than hide one field.
-          .select('id, request_id, title, category, quantity, unit_price, parsed, position, created_at, updated_at')
+          .select(ITEM_COLUMNS)
           .in('request_id', ids)
           .order('position', { ascending: true }),
         supabase
@@ -154,66 +223,110 @@ export function useBooklists() {
           .eq('buyer_id', user.id),
       ]);
 
-      if (itemsRes.error) throw itemsRes.error;
+      // 42703 / PGRST204: bookshops_booklist_author.sql has not been run
+      // on this project. Naming `author` fails the WHOLE select, which
+      // would empty every card over one optional field — so retry
+      // without it rather than lose the lines.
+      // Typed as unknown because the two selects have different column
+      // lists and so different inferred row types; BookRequestItem is the
+      // shape both actually satisfy (author is optional on it for exactly
+      // this reason).
+      let itemRows: unknown = itemsRes.data;
+      if (itemsRes.error?.code === '42703' || itemsRes.error?.code === 'PGRST204') {
+        const retry = await supabase
+          .from('book_request_items')
+          .select(ITEM_COLUMNS.replace(', author', ''))
+          .in('request_id', ids)
+          .order('position', { ascending: true });
+        if (retry.error) throw retry.error;
+        itemRows = retry.data;
+      } else if (itemsRes.error) {
+        throw itemsRes.error;
+      }
       if (quotesRes.error) throw quotesRes.error;
       if (ordersRes.error) throw ordersRes.error;
 
+      const quotes = (quotesRes.data ?? []) as unknown as Quote[];
+
+      // Fourth read, and the one this page was missing: the per-line
+      // prices. It has to follow the quotes because it is keyed by their
+      // ids. quote_items_select_buyer_sent scopes it server-side to
+      // non-draft quotes on this buyer's own requests.
+      let quoteItems: QuoteItem[] = [];
+      const quoteIds = quotes.map((q) => q.id);
+      if (quoteIds.length > 0) {
+        const quoteItemsRes = await supabase
+          .from('quote_items')
+          .select('id, quote_id, request_item_id, title, quantity, unit_price, is_available, position, created_at, updated_at')
+          .in('quote_id', quoteIds)
+          .order('position', { ascending: true });
+        if (quoteItemsRes.error) throw quoteItemsRes.error;
+        quoteItems = (quoteItemsRes.data ?? []) as QuoteItem[];
+      }
+
       setRaw({
         requests,
-        items: (itemsRes.data ?? []) as BookRequestItem[],
-        quotes: (quotesRes.data ?? []) as unknown as Quote[],
+        items: (itemRows ?? []) as BookRequestItem[],
+        quotes,
+        quoteItems,
         orders: (ordersRes.data ?? []) as Order[],
       });
     } catch (e) {
+      if (!current()) return;
       setError(e as Error);
-      setRaw(EMPTY);
+      // A background revalidate that fails must not wipe the rows the
+      // buyer is already reading. Keep them and surface the error.
+      if (mode !== 'background') setRaw(EMPTY);
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      // Unconditional, and guarded so only the newest run may clear the
+      // flags: an older run finishing late must not switch a spinner off
+      // under a newer one, nor leave one on after this run is done.
+      if (current()) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, []);
 
   useEffect(() => {
-    load();
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(() => load());
-    return () => subscription.unsubscribe();
+    load({ mode: 'initial' });
+    return subscribeToAuthReloads(() => load({ mode: 'background' }));
   }, [load]);
 
   const booklists: Booklist[] = useMemo(() => {
-    const { requests, items, quotes, orders } = raw;
+    const { requests, items, quotes, quoteItems, orders } = raw;
 
     return requests.map((request) => {
-      const myItems = items
+      const rawItems = items
         .filter((i) => i.request_id === request.id)
         .sort((a, b) => a.position - b.position);
       const myQuotes = quotes.filter((q) => q.request_id === request.id);
       const quoteIds = new Set(myQuotes.map((q) => q.id));
       const order = orders.find((o) => quoteIds.has(o.quote_id)) ?? null;
 
-      const accepted = myQuotes.find((q) => q.status === 'accepted');
-      const cheapest = myQuotes
-        .filter((q) => q.status === 'sent')
-        .sort((a, b) => Number(a.total_price) - Number(b.total_price))[0];
-      const itemsTotal = myItems.reduce(
-        (sum, i) => sum + (i.unit_price ?? 0) * i.quantity,
-        0
-      );
+      // One quote prices the lines, and it is the same one the header
+      // figure comes from. Reading the total off quote A while pricing
+      // the lines from quote B is how a card ends up not adding up.
+      const pricingQuote = pickPricingQuote(myQuotes);
+      const myItems = priceBooklistItems(rawItems, quoteItems, pricingQuote?.id ?? null);
+      const linesTotal = sumLineTotals(myItems);
+      const quotedLines = hasQuotedLines(myItems);
 
       let estimatedTotal = 0;
       let totalSource: Booklist['totalSource'] = 'none';
-      if (order && accepted) {
-        estimatedTotal = Number(accepted.total_price);
-        totalSource = 'order';
-      } else if (accepted) {
-        estimatedTotal = Number(accepted.total_price);
-        totalSource = 'quote';
-      } else if (cheapest) {
-        estimatedTotal = Number(cheapest.total_price);
-        totalSource = 'quote';
-      } else if (itemsTotal > 0) {
-        estimatedTotal = itemsTotal;
+      let totalMatchesLines = true;
+
+      if (pricingQuote) {
+        const quoteTotal = Number(pricingQuote.total_price) || 0;
+        // Prefer the sum of the lines on screen. refresh_quote_total()
+        // keeps quotes.total_price equal to exactly this sum, so the two
+        // normally agree — and when they do not, the number the buyer
+        // can check line by line is the one to show.
+        estimatedTotal = quotedLines ? linesTotal : quoteTotal;
+        totalMatchesLines = !quotedLines || totalsAgree(linesTotal, quoteTotal);
+        totalSource = order && pricingQuote.status === 'accepted' ? 'order' : 'quote';
+      } else if (linesTotal > 0) {
+        estimatedTotal = linesTotal;
         totalSource = 'items';
       }
 
@@ -228,7 +341,9 @@ export function useBooklists() {
         lineCount: myItems.length,
         estimatedTotal,
         totalSource,
-        hasUnpricedItems: myItems.some((i) => i.unit_price == null),
+        hasUnpricedItems: myItems.some((i) => i.isAvailable && i.lineTotal == null),
+        unavailableCount: myItems.filter((i) => !i.isAvailable).length,
+        totalMatchesLines,
       };
     });
   }, [raw]);
@@ -249,7 +364,14 @@ export function useBooklists() {
     loading,
     refreshing,
     error,
-    refresh: () => load({ isRefresh: true }),
-    reload: load,
+    /** Pull-to-refresh: platform spinner, rows stay put. */
+    refresh: () => load({ mode: 'refresh' }),
+    /**
+     * Re-read after a write. Nothing on screen goes back to a skeleton —
+     * the rows are replaced in place once the new data lands.
+     */
+    revalidate: () => load({ mode: 'background' }),
+    /** Full reload with skeletons. For a retry after a hard failure. */
+    reload: () => load({ mode: 'initial' }),
   };
 }

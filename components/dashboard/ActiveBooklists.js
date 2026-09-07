@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Card, Pill } from './Card';
+import { LINE_PRICE_LABEL, linePriceState } from '../../lib/booklistPricing';
 import { colors, spacing, radius, font, formatNaira } from '../../theme';
 
 function Checkbox({ checked, onToggle, label }) {
@@ -19,11 +20,29 @@ function Checkbox({ checked, onToggle, label }) {
   );
 }
 
-function ItemRow({ item, checked, onToggle, isLast }) {
-  // A saved booklist line has no price until a vendor quotes it.
+function ItemRow({ item, checked, onToggle, isLast, hasQuote }) {
   // formatNaira(null) renders ₦0, which reads as "free" rather than
-  // "nobody has priced this yet" — so null is handled before it.
-  const unpriced = item.unit_price == null;
+  // "nobody has priced this yet" — so the empty cases are handled before
+  // it ever runs.
+  //
+  // line_total comes from the pricing quote's quote_items. Demo rows
+  // carry a bare unit_price instead, hence the fallback.
+  const lineTotal =
+    item.line_total != null
+      ? Number(item.line_total)
+      : item.unit_price == null
+      ? null
+      : Number(item.unit_price) * (Number(item.quantity) || 1);
+
+  const available = item.is_available !== false;
+  const unpriced = lineTotal == null;
+
+  // Shared with the My Booklists card, so the same line cannot be
+  // described two different ways on two screens.
+  const state = linePriceState({ lineTotal, isAvailable: available }, hasQuote === true);
+  const priceLabel = state === 'priced' ? formatNaira(lineTotal) : LINE_PRICE_LABEL[state];
+
+  const showsUnitPrice = available && lineTotal != null && (Number(item.quantity) || 1) > 1;
 
   return (
     <View style={[styles.itemRow, isLast && styles.itemRowLast]}>
@@ -48,9 +67,28 @@ function ItemRow({ item, checked, onToggle, isLast }) {
         )}
       </View>
       <View style={styles.itemRight}>
-        <Text style={[styles.itemPrice, unpriced && styles.itemPriceMuted]}>
-          {unpriced ? 'Not priced' : formatNaira(item.unit_price)}
+        <Text
+          style={[
+            styles.itemPrice,
+            unpriced && styles.itemPriceMuted,
+            !available && styles.itemPriceOut,
+          ]}
+        >
+          {priceLabel}
         </Text>
+        {/* The per-copy figure, so a multi-copy line reads as a price
+            times a count rather than an unexplained larger number. */}
+        {showsUnitPrice && (
+          <Text style={styles.itemUnitPrice}>{formatNaira(item.unit_price)} each</Text>
+        )}
+        {/* The shop offered fewer copies than were asked for. Quietly
+            billing for two when three were requested is the kind of gap
+            a parent only finds at the counter. */}
+        {available && item.requested_quantity > (Number(item.quantity) || 1) && (
+          <Text style={styles.itemQtyWarn}>
+            {item.quantity} of {item.requested_quantity} quoted
+          </Text>
+        )}
         {item.in_stock === false && <Pill label="Low Stock" tone="warning" />}
       </View>
     </View>
@@ -68,7 +106,9 @@ export function ActiveBooklists({
   onToggleItem,
   onOpenRequest,
   onOpenDrafts,
+  onOpenOrders,
   draftCount = 0,
+  orderedCount = 0,
   loading,
 }) {
   const [openId, setOpenId] = useState(requests?.[0]?.id ?? null);
@@ -86,32 +126,47 @@ export function ActiveBooklists({
   }
 
   if (!requests?.length) {
-    // Drafts are deliberately not listed in this card, so telling a buyer
-    // who has three of them that they have "no booklists yet" would be
-    // false. Point at where their work actually is instead.
+    // Neither drafts nor ordered lists appear in this card — drafts are
+    // still being written, and an ordered list has become an order and
+    // lives on My Orders. Telling a buyer who has either that they have
+    // "no booklists yet" would be false, so point at where their work
+    // actually is. Drafts first: they are the ones still needing a hand.
     const hasDrafts = draftCount > 0;
+    const hasOrders = orderedCount > 0;
+
+    const copy = hasDrafts
+      ? `You have ${draftCount} draft${draftCount === 1 ? '' : 's'} waiting. Send one to vendors and it will appear here.`
+      : hasOrders
+      ? `Nothing awaiting a decision. Your ${orderedCount} ordered booklist${
+          orderedCount === 1 ? '' : 's'
+        } moved to My Orders.`
+      : 'No booklists yet. Snap a photo of a school booklist to get quotes from nearby shops.';
+
+    const action = hasDrafts
+      ? { label: 'Open My Booklists', onPress: onOpenDrafts, hint: 'Open My Booklists to finish a draft' }
+      : hasOrders
+      ? { label: 'Open My Orders', onPress: onOpenOrders, hint: 'Open My Orders to track a purchase' }
+      : null;
 
     return (
       <Card title="Active Booklist Requests">
         <View style={styles.empty}>
           <Ionicons
-            name={hasDrafts ? 'create-outline' : 'document-text-outline'}
+            name={
+              hasDrafts ? 'create-outline' : hasOrders ? 'cube-outline' : 'document-text-outline'
+            }
             size={26}
             color={colors.textFaint}
           />
-          <Text style={styles.emptyText}>
-            {hasDrafts
-              ? `You have ${draftCount} draft${draftCount === 1 ? '' : 's'} waiting. Send one to vendors and it will appear here.`
-              : 'No booklists yet. Snap a photo of a school booklist to get quotes from nearby shops.'}
-          </Text>
-          {hasDrafts && !!onOpenDrafts && (
+          <Text style={styles.emptyText}>{copy}</Text>
+          {action?.onPress && (
             <Pressable
-              onPress={onOpenDrafts}
+              onPress={action.onPress}
               style={({ pressed }) => [styles.emptyAction, pressed && styles.emptyActionPressed]}
               accessibilityRole="button"
-              accessibilityLabel="Open My Booklists to finish a draft"
+              accessibilityLabel={action.hint}
             >
-              <Text style={styles.emptyActionText}>Open My Booklists</Text>
+              <Text style={styles.emptyActionText}>{action.label}</Text>
               <Ionicons name="chevron-forward" size={15} color={colors.navy} />
             </Pressable>
           )}
@@ -123,7 +178,6 @@ export function ActiveBooklists({
   return (
     <Card
       title="Active Booklist Requests"
-      right={requests[0]?.demo ? <Pill label="Demo data" tone="accent" /> : null}
     >
       {requests.map((request) => {
         const open = openId === request.id;
@@ -177,6 +231,7 @@ export function ActiveBooklists({
                       isLast={i === request.items.length - 1}
                       checked={selection[item.id] !== false}
                       onToggle={() => onToggleItem(item.id)}
+                      hasQuote={request.hasQuote === true}
                     />
                   ))
                 )}
@@ -196,7 +251,7 @@ export function ActiveBooklists({
                     sent, which do not fit in this card. Demo rows have
                     made-up ids that no query resolves, so they get no
                     link rather than one that dead-ends. */}
-                {!request.demo && !!onOpenRequest && (
+                {!!onOpenRequest && (
                   <Pressable
                     onPress={() => onOpenRequest(request)}
                     style={({ pressed }) => [styles.openRow, pressed && styles.openRowPressed]}
@@ -289,6 +344,9 @@ const styles = StyleSheet.create({
   itemRight: { alignItems: 'flex-end', gap: 3 },
   itemPrice: { fontSize: font.md, fontWeight: '700', color: colors.text },
   itemPriceMuted: { fontSize: font.sm, fontWeight: '500', color: colors.textFaint },
+  itemPriceOut: { fontSize: font.sm, fontWeight: '600', color: colors.textMuted },
+  itemUnitPrice: { fontSize: font.xs, color: colors.textMuted },
+  itemQtyWarn: { fontSize: font.xs, color: colors.warning },
 
   checkbox: {
     width: 19,

@@ -1,3 +1,4 @@
+import { Platform } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { supabase } from '../utils/supabase';
 import type { DispatchType, ItemCategory } from '../types/db';
@@ -10,27 +11,169 @@ export interface PickedImage {
   fileName: string;
 }
 
+export type ImageSource = 'library' | 'camera';
+
 /**
- * Opens the camera roll (or camera) and returns the chosen image.
- * Returns null when the user cancels or declines the permission.
+ * Opens the camera (or the photo library) and returns the chosen image.
+ * Returns null when the person cancels or declines the permission.
+ *
+ * Two implementations, because the two platforms fail in opposite ways.
+ * See each one.
  */
-export async function pickBooklistImage(
-  source: 'library' | 'camera' = 'library'
-): Promise<PickedImage | null> {
-  if (source === 'camera') {
-    const perm = await ImagePicker.requestCameraPermissionsAsync();
-    if (!perm.granted) return null;
-  } else {
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) return null;
+export function pickBooklistImage(source: ImageSource = 'library'): Promise<PickedImage | null> {
+  return Platform.OS === 'web' ? pickImageWeb(source) : pickImageNative(source);
+}
+
+/**
+ * Web: build and click a hidden file input SYNCHRONOUSLY.
+ *
+ * Synchronous because a browser only opens a file dialog while the click
+ * that asked for it is still the live user gesture; every `await` before
+ * the `.click()` risks spending it. expo-image-picker awaits a
+ * permission call first, which is why "Take a photo" did nothing on
+ * localhost — no dialog, no error, no console line.
+ *
+ * `capture="environment"` asks a phone browser for the rear camera and
+ * is ignored by desktop browsers, which fall back to the file chooser.
+ * That is the wanted behaviour in both places.
+ *
+ * How this settles is the part that bit us, so it is spelled out:
+ *
+ *   change  a file was chosen. Always trusted, whenever it arrives.
+ *   cancel  the dialog was dismissed. Supported by Chrome 113+,
+ *           Safari 16.4+ and Firefox 91+, and it is exact.
+ *
+ * There is deliberately NO "the window got focus back, so they must have
+ * cancelled" timer on browsers that fire `cancel`. That heuristic was
+ * here and it was wrong: focus can return to the window while the OS
+ * dialog is still open, and the timer then resolved null and tore the
+ * input down a moment before the real `change` arrived — silently
+ * discarding the photo the person had just chosen. A guarded version of
+ * it survives only for browsers with no `cancel` event at all, and even
+ * there it never removes the input while a selection could still land.
+ */
+function pickImageWeb(source: ImageSource): Promise<PickedImage | null> {
+  if (typeof document === 'undefined') return Promise.resolve(null);
+
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    if (source === 'camera') input.setAttribute('capture', 'environment');
+    // Off-screen rather than display:none — Safari has historically
+    // ignored .click() on an input that is not rendered at all.
+    input.style.position = 'fixed';
+    input.style.left = '-10000px';
+    input.style.top = '0';
+    input.style.opacity = '0';
+
+    let settled = false;
+    let focusTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const finish = (value: PickedImage | null) => {
+      if (settled) return;
+      settled = true;
+      if (focusTimer) clearTimeout(focusTimer);
+      window.removeEventListener('focus', onWindowFocus);
+      input.remove();
+      resolve(value);
+    };
+
+    input.addEventListener('change', () => {
+      const file = input.files?.[0];
+      if (!file) return finish(null);
+      finish({
+        // A blob: URL, which the caller owns and must revoke — see
+        // releaseImage(). Not revoked here: the review screen renders
+        // from this uri and the upload reads it back through fetch().
+        uri: URL.createObjectURL(file),
+        mimeType: file.type || 'image/jpeg',
+        fileName: file.name || `booklist-${Date.now()}.jpg`,
+      });
+    });
+
+    input.addEventListener('cancel', () => finish(null));
+
+    function onWindowFocus() {
+      // Legacy path only. Long enough that a dialog still being used
+      // does not trip it, and it re-checks the input before giving up.
+      focusTimer = setTimeout(() => {
+        if (!settled && !input.files?.length) finish(null);
+      }, 1500);
+    }
+
+    // Feature-detected, not assumed: where `cancel` exists it is exact,
+    // and the focus heuristic must not run alongside it.
+    const supportsCancel = 'oncancel' in input;
+    if (!supportsCancel) {
+      window.addEventListener('focus', onWindowFocus, { once: true });
+    }
+
+    document.body.appendChild(input);
+    input.click();
+  });
+}
+
+/**
+ * Frees a picked image.
+ *
+ * On web `uri` is a blob: URL held by the document until it is revoked,
+ * so a buyer who picks six photos before settling on one leaves six full
+ * images pinned in memory. No-op for a native file:// uri.
+ *
+ * Call this when the image is REPLACED or discarded — never while
+ * something is still rendering it. A revoked blob URL renders as a
+ * broken image, which is precisely the "wrong photo" class of bug.
+ */
+export function releaseImage(image: PickedImage | null | undefined): void {
+  if (!image?.uri?.startsWith('blob:')) return;
+  try {
+    URL.revokeObjectURL(image.uri);
+  } catch {
+    // Already revoked, or no URL API. Nothing to do either way.
+  }
+}
+
+/**
+ * Native: ask, then launch.
+ *
+ * The caller must have dismissed any open Modal FIRST and waited for it
+ * to actually be gone — see hooks/useCreateBooklist. On iOS a picker
+ * presented from underneath a still-mounted Modal is simply never
+ * shown: no error, no camera, nothing.
+ *
+ * A refused permission throws rather than returning null, so the caller
+ * can say why. Returning null here made a refusal indistinguishable
+ * from a cancel, and the buyer got no explanation at all.
+ */
+async function pickImageNative(source: ImageSource): Promise<PickedImage | null> {
+  const permission =
+    source === 'camera'
+      ? await ImagePicker.requestCameraPermissionsAsync()
+      : await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+  if (!permission.granted) {
+    throw new Error(
+      source === 'camera'
+        ? 'Camera access is needed to photograph the booklist. Turn it on for LOCI in your device settings.'
+        : 'Photo access is needed to pick the booklist. Turn it on for LOCI in your device settings.'
+    );
   }
 
   const result =
     source === 'camera'
-      ? await ImagePicker.launchCameraAsync({ quality: 0.7, allowsEditing: false })
+      ? await ImagePicker.launchCameraAsync({
+          mediaTypes: ['images'],
+          quality: 0.8,
+          // Deliberately off. iOS forces a SQUARE crop here, which cuts
+          // the bottom off a portrait sheet of paper — and the bottom of
+          // a school booklist is more books. The whole page has to reach
+          // the parser.
+          allowsEditing: false,
+        })
       : await ImagePicker.launchImageLibraryAsync({
           mediaTypes: ['images'],
-          quality: 0.7,
+          quality: 0.8,
           allowsEditing: false,
         });
 
@@ -147,45 +290,37 @@ export interface ParseResult {
 /**
  * Which parser backs parseBooklistImage.
  *
- * 'mock' is the default so the review-and-edit flow can be exercised
- * end to end without an OCR bill or an API key. Set
- * EXPO_PUBLIC_BOOKLIST_PARSER=edge on the build host to switch to the
- * Supabase Edge Function. Read at build time, not runtime — Expo inlines
- * EXPO_PUBLIC_* into the bundle.
+ * 'edge' — the default — calls the `parse-booklist` Edge Function, which
+ * is where the vision model lives. 'off' skips reading entirely and
+ * sends the buyer straight to typing.
+ *
+ * There is deliberately no 'mock'. A fixture mode used to be the
+ * DEFAULT here, and it returned the same twelve JSS 1 textbooks for
+ * every photo — so a parent who photographed a Lagos State JSS 3
+ * literature list was shown "Intensive English Language for JSS 1" and
+ * eleven other books they had never asked for, with no indication any
+ * of it was invented. Sending that to vendors gets the wrong books
+ * quoted and the wrong money taken. Fixtures do not belong on a path a
+ * real buyer can reach.
  */
-const PARSER_MODE = (process.env.EXPO_PUBLIC_BOOKLIST_PARSER ?? 'mock') as
-  | 'mock'
-  | 'edge'
-  | 'off';
+const PARSER_MODE = (process.env.EXPO_PUBLIC_BOOKLIST_PARSER ?? 'edge') as 'edge' | 'off';
 
 /** Name of the Edge Function to invoke when PARSER_MODE is 'edge'. */
 const PARSER_FUNCTION = 'parse-booklist';
 
-let mockCounter = 0;
-
 /**
- * Fixture data — a real JSS 1 list, so the review table is exercised
- * with the messy shapes that actually turn up: titles with no author,
- * an author given as initials, a dictionary and a hymn book that are not
- * subject textbooks, and enough rows to scroll.
+ * What the buyer is told when nothing could be read.
  *
- * The first three lines are the contract in the spec; the rest are here
- * because a three-row table hides every layout problem worth finding.
+ * Says what happened, and both ways forward — the photo is already
+ * attached, so a shop can read the list even if we could not.
  */
-const MOCK_ITEMS: Array<Pick<ParsedItem, 'title' | 'author'>> = [
-  { title: 'Intensive English Language for JSS 1', author: '' },
-  { title: 'New General Mathematics', author: 'A.O. Kalejaiye' },
-  { title: 'Oxford Advanced Learners Dictionary', author: '' },
-  { title: 'Science Teacher Association of Nigeria Science Project Book 1', author: '' },
-  { title: 'New Intensive Agriculture Science', author: 'E.E. Okoro' },
-  { title: 'WABP Business Studies Book 1 for Junior School', author: 'D. Osu' },
-  { title: 'Cultural and Creative Art for Junior Secondary School', author: '' },
-  { title: 'Basic Technology', author: 'Evans' },
-  { title: 'Comprehensive Physical Education', author: 'J.O. Ufi & E. Ojeme' },
-  { title: 'Home Economics', author: 'Elizabeth U. Aryahaha' },
-  { title: 'Holy Bible Revised Standard Version', author: '' },
-  { title: 'Basic Fact Social Studies', author: '' },
-];
+export const OCR_UNREADABLE_NOTE =
+  "We couldn't automatically read this photo. Please type your books below, or send the raw photo directly to shops.";
+
+/** The honest empty result. No items, and `parsed: false` so the UI can say so. */
+function unreadable(note = OCR_UNREADABLE_NOTE): ParseResult {
+  return { school_name: '', class_level: '', items: [], parsed: false, note };
+}
 
 /**
  * Turns a booklist photo into a structured, editable list.
@@ -195,96 +330,44 @@ const MOCK_ITEMS: Array<Pick<ParsedItem, 'title' | 'author'>> = [
  * the submit step inserts. Nothing here writes to the database — the
  * buyer confirms first, always.
  *
- * The mock path returns fixture data immediately so the whole flow is
- * testable locally. The real path is the Edge Function below.
+ * This never throws and never invents. Every failure — parser switched
+ * off, function not deployed, model down, malformed JSON — resolves to
+ * an empty list plus a note, because the photo is already uploaded and
+ * the buyer can still type the books or let a shop read the picture.
+ * Throwing would have been fine too; returning fake books never was.
  */
 export async function parseBooklistImage(imagePath: string): Promise<ParseResult> {
-  if (PARSER_MODE === 'edge') return parseViaEdgeFunction(imagePath);
-  if (PARSER_MODE === 'mock') return mockParse();
+  if (PARSER_MODE === 'off') {
+    return unreadable(
+      'Automatic reading is switched off for this build. Type your books below, or send the raw photo directly to shops.'
+    );
+  }
 
-  console.warn(
-    '[booklist] parseBooklistImage is disabled (EXPO_PUBLIC_BOOKLIST_PARSER=off). Path:',
-    imagePath
-  );
-  return {
-    school_name: '',
-    class_level: '',
-    items: [],
-    parsed: false,
-    note: 'Automatic reading is not set up yet — add the items yourself and vendors will quote them.',
-  };
-}
+  try {
+    const { data, error } = await supabase.functions.invoke(PARSER_FUNCTION, {
+      body: { imagePath },
+    });
+    if (error) throw error;
 
-/** Local development stand-in. Shaped exactly like the real response. */
-async function mockParse(): Promise<ParseResult> {
-  // A beat of latency on purpose: without it the "Reading your list…"
-  // state never renders, so its layout goes untested until production.
-  await new Promise((resolve) => setTimeout(resolve, 900));
-
-  return {
-    school_name: 'St. Columbanus Secondary School',
-    class_level: 'JSS 1',
-    parsed: true,
-    note: '',
-    items: MOCK_ITEMS.map((item) => ({
-      id: `mock-${mockCounter++}`,
-      title: item.title,
-      author: item.author,
-      category: guessCategory(item.title),
-      quantity: 1,
-      unit_price: null,
-      selected: true,
-    })),
-  };
-}
-
-/**
- * Production path — NOT WIRED UP YET.
- *
- * TODO(parsing): deploy `supabase/functions/parse-booklist` and delete
- * the throw below. The function is where the vision call belongs, not
- * the client: it holds the model API key server-side, it can sign the
- * private object itself with the service role, and it can be rate
- * limited per user. A key shipped in an Expo bundle is a public key.
- *
- * The function should:
- *   1. verify the caller's JWT and that they own `imagePath`
- *      (the first path segment must equal auth.uid());
- *   2. create a short-lived signed URL for the object;
- *   3. send it to a vision model — OpenAI gpt-4o / Gemini 1.5 Pro —
- *      asking for STRICT JSON, no prose:
- *        { school_name, class_level,
- *          items: [{ title, author, quantity }] }
- *      System prompt worth keeping: Nigerian school booklists number
- *      their lines, wrap long titles across two lines, and write the
- *      author after "by". Instruct it to rejoin wrapped lines, strip
- *      the leading numbering, and leave author empty rather than
- *      guessing one.
- *   4. return that JSON unchanged. Everything below the API boundary
- *      stays the same, so no caller changes when this lands.
- *
- * Wiring, once deployed — this is the whole body:
- *
- *   const { data, error } = await supabase.functions.invoke(
- *     PARSER_FUNCTION,
- *     { body: { imagePath } }
- *   );
- *   if (error) throw error;
- *   return normaliseParseResponse(data);
- */
-async function parseViaEdgeFunction(imagePath: string): Promise<ParseResult> {
-  throw new Error(
-    `The booklist parser Edge Function (${PARSER_FUNCTION}) is not deployed yet. ` +
-      `Set EXPO_PUBLIC_BOOKLIST_PARSER=mock to use the local stand-in. Path: ${imagePath}`
-  );
+    const result = normaliseParseResponse(data);
+    // A response with no usable lines is a failure to read, not a
+    // booklist with no books on it. Say so rather than presenting an
+    // empty table as though the photo were blank.
+    return result.items.length ? result : unreadable();
+  } catch (e) {
+    // Logged for the developer, not shown raw to the buyer: the message
+    // is usually "Failed to send a request to the Edge Function", which
+    // tells a parent nothing.
+    console.warn(`[booklist] ${PARSER_FUNCTION} could not read ${imagePath}:`, e);
+    return unreadable();
+  }
 }
 
 /**
  * Coerces whatever the parser returned into ParseResult.
  *
- * Kept out of parseViaEdgeFunction so it is already here, and already
- * defensive, when the function lands: a vision model's JSON is a
- * suggestion, not a contract. Anything missing degrades to a blank
+ * A vision model's JSON is a suggestion, not a contract, so this is
+ * deliberately paranoid. Anything missing degrades to a blank
  * field the buyer can fill in, which is the whole point of the review
  * step.
  */
@@ -556,7 +639,7 @@ export async function updateBookRequest(
       .from('book_request_items')
       .update({
         title: item.title.trim(),
-        author: item.author.trim() || null,
+        author: item.author.trim(),
         category: guessCategory(item.title),
         quantity: item.quantity,
         position,
@@ -575,7 +658,7 @@ export async function updateBookRequest(
     .map(({ item, position }) => ({
       request_id: requestId,
       title: item.title.trim(),
-      author: item.author.trim() || null,
+      author: item.author.trim(),
       category: guessCategory(item.title),
       quantity: item.quantity,
       parsed: false,
@@ -608,14 +691,50 @@ export async function publishBookRequest(
   if (countError) throw countError;
 
   if (!count) {
-    throw new Error('Add at least one book before sending this list to vendors.');
+    // A photo is a list. When the parser could not read one, the buyer
+    // is told they may send the picture on its own — a shop opens the
+    // request, reads it and quotes, which is what already happens over
+    // WhatsApp. Refusing here would make that promise a lie. What is
+    // still refused is a request with neither books nor a photo: there
+    // would be nothing in it to quote.
+    const { data: request, error: lookupError } = await supabase
+      .from('book_requests')
+      .select('image_path')
+      .eq('id', requestId)
+      .maybeSingle();
+    if (lookupError) throw lookupError;
+
+    if (!request?.image_path) {
+      throw new Error(
+        'Add at least one book, or attach a photo of the list, before sending this to vendors.'
+      );
+    }
   }
 
-  const { data, error } = await supabase
+  const columns = dispatchColumns(dispatch);
+
+  let { data, error } = await supabase
     .from('book_requests')
-    .update({ status: PUBLISHED_STATUS, ...dispatchColumns(dispatch) })
+    .update({ status: PUBLISHED_STATUS, ...columns })
     .eq('id', requestId)
     .select('id');
+
+  // 42703 = undefined_column, PGRST204 = not in PostgREST's schema cache.
+  // Either way bookshops_dispatch_routing.sql has not been run on this
+  // project and there is no dispatch_type column. Naming it fails the
+  // WHOLE update, so a buyer sending a list to one shop would get an
+  // error instead of a sent list. target_vendor_id exists on its own and
+  // is what vendor_request_queue() actually reads, so retry without the
+  // column that is missing rather than losing the routing entirely.
+  if (error?.code === '42703' || error?.code === 'PGRST204') {
+    const { dispatch_type: _unused, ...rest } = columns;
+    ({ data, error } = await supabase
+      .from('book_requests')
+      .update({ status: PUBLISHED_STATUS, ...rest })
+      .eq('id', requestId)
+      .select('id'));
+  }
+
   if (error) throw error;
   if (!data?.length) {
     throw new Error('That booklist could not be published. It may have been deleted.');
@@ -636,11 +755,28 @@ export async function publishBookRequest(
  * which is exactly the mistake this function exists to prevent.
  */
 export async function routeBookRequest(requestId: string, dispatch: Dispatch): Promise<void> {
-  const { data, error } = await supabase
+  const columns = dispatchColumns(dispatch);
+  const stamped = { ...columns, updated_at: new Date().toISOString() };
+
+  let { data, error } = await supabase
     .from('book_requests')
-    .update({ ...dispatchColumns(dispatch), updated_at: new Date().toISOString() })
+    .update(stamped)
     .eq('id', requestId)
     .select('id');
+
+  // Same fallback publishBookRequest carries: this project has no
+  // dispatch_type column until bookshops_dispatch_routing.sql is run,
+  // and naming it fails the whole update. target_vendor_id exists on its
+  // own and is what vendor_request_queue() reads.
+  if (error?.code === '42703' || error?.code === 'PGRST204') {
+    const { dispatch_type: _unused, ...rest } = stamped;
+    ({ data, error } = await supabase
+      .from('book_requests')
+      .update(rest)
+      .eq('id', requestId)
+      .select('id'));
+  }
+
   if (error) throw error;
   if (!data?.length) {
     throw new Error('That booklist could not be sent. It may have been deleted.');

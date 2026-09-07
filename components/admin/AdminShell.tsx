@@ -8,21 +8,23 @@ import { useLayout } from '../../hooks/useLayout';
  * Where an admin nav item goes. A union, so a link to a screen that does
  * not exist is a compile error rather than an "Unmatched Route" tap.
  *
- * Dashboard points at `/admin` — the control centre that is actually
- * built — not an empty `/admin/dashboard`. Settings points at the shared
- * `/settings`, which already branches on role; a second admin-only
- * settings screen would be two places to change one preference.
+ * These are the canonical paths. `/admin`, `/admin/payments` and
+ * `/admin/support` still resolve — they are kept as redirect screens so
+ * that bookmarks, the admin landing route and anything already linking
+ * to them keep working — but nothing new should point at them.
  */
 export type AdminRoute =
-  | '/admin'
-  | '/admin/analytics'
-  | '/admin/vendors'
-  | '/admin/users'
+  | '/admin/dashboard'
   | '/admin/booklists'
   | '/admin/orders'
-  | '/admin/payments'
-  | '/admin/support'
-  | '/settings';
+  | '/admin/disputes'
+  | '/admin/vendors'
+  | '/admin/users'
+  | '/admin/catalog'
+  | '/admin/financials'
+  | '/admin/cms'
+  | '/admin/analytics'
+  | '/admin/settings';
 
 export interface AdminNavItem {
   key: string;
@@ -30,20 +32,50 @@ export interface AdminNavItem {
   icon: keyof typeof Ionicons.glyphMap;
   /** null for Logout, which is an action rather than a destination. */
   route: AdminRoute | null;
+  /** One line on what the section covers; announced as the a11y hint. */
+  hint?: string;
   badge?: number;
 }
 
+/**
+ * The admin menu, in operational order: what you check daily first,
+ * then the people and money behind it, then the things you set once.
+ *
+ * `hint` is the one-line description of the section. It is not
+ * decoration — it becomes the accessibility hint on the row, so a
+ * screen reader announces what "Booklist Engine" actually covers.
+ *
+ * Icons are Ionicons, not Lucide: this project ships @expo/vector-icons
+ * and nothing else, and adding a second icon set for three glyphs would
+ * grow the bundle for no visible gain. The three that were named map
+ * across as BookOpen -> book-outline, AlertTriangle -> warning-outline,
+ * Image -> image-outline.
+ */
 export const ADMIN_NAV: AdminNavItem[] = [
-  { key: 'dashboard', label: 'Dashboard', icon: 'home-outline', route: '/admin' },
-  { key: 'analytics', label: 'Platform Analytics', icon: 'bar-chart-outline', route: '/admin/analytics' },
-  { key: 'vendors', label: 'Vendor Management', icon: 'storefront-outline', route: '/admin/vendors' },
-  { key: 'users', label: 'User Management', icon: 'people-outline', route: '/admin/users' },
-  { key: 'booklists', label: 'Booklist Hub', icon: 'bookmark-outline', route: '/admin/booklists' },
-  { key: 'orders', label: 'Orders Overview', icon: 'receipt-outline', route: '/admin/orders' },
-  { key: 'payments', label: 'Financials & Payments', icon: 'wallet-outline', route: '/admin/payments' },
-  { key: 'support', label: 'Customer Support', icon: 'chatbubble-outline', route: '/admin/support' },
-  { key: 'settings', label: 'Settings', icon: 'settings-outline', route: '/settings' },
-  { key: 'logout', label: 'Logout', icon: 'log-out-outline', route: null },
+  { key: 'dashboard', label: 'Dashboard', icon: 'home-outline', route: '/admin/dashboard',
+    hint: 'Platform overview and today\u2019s activity' },
+  { key: 'booklists', label: 'Booklist Engine', icon: 'documents-outline', route: '/admin/booklists',
+    hint: 'Incoming customer lists, OCR outputs and request volume' },
+  { key: 'orders', label: 'Orders Overview', icon: 'receipt-outline', route: '/admin/orders',
+    hint: 'Platform-wide order activity' },
+  { key: 'disputes', label: 'Disputes & Support', icon: 'warning-outline', route: '/admin/disputes',
+    hint: 'Escrow holds, refund claims and support tickets' },
+  { key: 'vendors', label: 'Vendor Management', icon: 'storefront-outline', route: '/admin/vendors',
+    hint: 'Shop verifications, document review and vendor status' },
+  { key: 'users', label: 'User Management', icon: 'people-outline', route: '/admin/users',
+    hint: 'Buyer profiles and admin role assignments' },
+  { key: 'catalog', label: 'Master Catalog', icon: 'book-outline', route: '/admin/catalog',
+    hint: 'Master book database, curriculum lists and school directories' },
+  { key: 'financials', label: 'Financials & Payouts', icon: 'wallet-outline', route: '/admin/financials',
+    hint: 'Commission rates, payment gate logs and vendor payout approvals' },
+  { key: 'cms', label: 'Banners & Marketing', icon: 'image-outline', route: '/admin/cms',
+    hint: 'Homepage banners, promos and featured vendors' },
+  { key: 'analytics', label: 'Platform Analytics', icon: 'bar-chart-outline', route: '/admin/analytics',
+    hint: 'Marketplace performance metrics and reporting' },
+  { key: 'settings', label: 'Settings', icon: 'settings-outline', route: '/admin/settings',
+    hint: 'Your admin account and preferences' },
+  { key: 'logout', label: 'Logout', icon: 'log-out-outline', route: null,
+    hint: 'Sign out of the admin console' },
 ];
 
 export function AdminTopBar({
@@ -147,6 +179,16 @@ export function AdminSidebar({
             ]}
             accessibilityRole="button"
             accessibilityState={{ selected: active }}
+            accessibilityLabel={item.label}
+            // Announced by VoiceOver and TalkBack. It does NOT reach the
+            // browser: react-native-web filters Pressable's props to a
+            // whitelist, and accessibilityHint is not on it — nor are
+            // aria-description or title, both of which were tried and
+            // stripped. So on web the hint text is documentation for
+            // whoever edits ADMIN_NAV, not something a screen reader
+            // reads. Surfacing it in a browser would mean rendering it
+            // as visible secondary text under each label.
+            accessibilityHint={item.hint}
           >
             <Ionicons
               name={item.icon}

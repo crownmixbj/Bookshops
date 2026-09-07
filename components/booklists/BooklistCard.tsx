@@ -1,8 +1,10 @@
-import { useMemo, useState } from 'react';
-import { View, Text, Pressable, StyleSheet } from 'react-native';
+import { useCallback, useMemo, useState } from 'react';
+import { View, Text, Pressable, Modal, Image, ActivityIndicator, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { CATEGORY_LABEL } from '../../hooks/useBooklists';
-import type { Booklist, BookRequestItem, FulfillmentStatus, RequestStatus } from '../../types/db';
+import { LINE_PRICE_LABEL, linePriceState } from '../../lib/booklistPricing';
+import { signBooklistImage } from '../../lib/booklistUpload';
+import type { Booklist, FulfillmentStatus, PricedBooklistItem, RequestStatus } from '../../types/db';
 import { colors, spacing, radius, font, shadow, formatNaira } from '../../theme';
 
 const CATEGORY_ICON: Record<string, keyof typeof Ionicons.glyphMap> = {
@@ -50,8 +52,24 @@ function Chip({ label, tone = 'neutral', icon }: {
   );
 }
 
-function ItemRow({ item, serial }: { item: BookRequestItem; serial: number }) {
-  const lineTotal = item.unit_price == null ? null : item.unit_price * item.quantity;
+function ItemRow({
+  item,
+  serial,
+  hasQuote,
+}: {
+  item: PricedBooklistItem;
+  serial: number;
+  hasQuote: boolean;
+}) {
+  // Shared with the dashboard accordion, so the same line cannot be
+  // described two different ways on two screens.
+  const authorText = (item.author ?? '').trim();
+  const state = linePriceState(item, hasQuote);
+  const priceLabel =
+    state === 'priced' ? formatNaira(item.lineTotal as number) : LINE_PRICE_LABEL[state];
+
+  const showsUnitPrice =
+    item.isAvailable && item.lineTotal != null && item.effectiveQuantity > 1;
 
   return (
     <View style={styles.itemRow}>
@@ -76,12 +94,45 @@ function ItemRow({ item, serial }: { item: BookRequestItem; serial: number }) {
             {item.title}
           </Text>
         </View>
+        {/* The edition, in effect. Two shops quoting "New General
+            Mathematics" are not necessarily quoting the same book, and
+            this line is what settles it — so it is shown even when
+            empty, because a missing author is itself worth seeing. */}
+        <Text
+          style={[styles.itemAuthor, !authorText && styles.itemAuthorMissing]}
+          numberOfLines={1}
+        >
+          {authorText || 'Author / publisher not specified'}
+        </Text>
         {item.parsed && <Text style={styles.itemParsed}>read from photo — check this line</Text>}
       </View>
 
-      <Text style={[styles.itemPrice, lineTotal == null && styles.itemPriceMuted]}>
-        {lineTotal == null ? 'Not priced' : formatNaira(lineTotal)}
-      </Text>
+      <View style={styles.itemPriceWrap}>
+        <Text
+          style={[
+            styles.itemPrice,
+            item.lineTotal == null && styles.itemPriceMuted,
+            !item.isAvailable && styles.itemPriceOut,
+          ]}
+        >
+          {priceLabel}
+        </Text>
+        {/* The per-copy figure, so a three-copy line reads as a price
+            times a count rather than an unexplained larger number. */}
+        {showsUnitPrice && (
+          <Text style={styles.itemUnitPrice}>
+            {formatNaira(item.effectiveUnitPrice as number)} each
+          </Text>
+        )}
+        {/* The shop quoted fewer copies than were asked for. Silently
+            billing for two when three were requested is the kind of gap
+            a parent finds at the counter. */}
+        {item.isAvailable && item.effectiveQuantity !== item.quantity && (
+          <Text style={styles.itemQtyWarn}>
+            {item.effectiveQuantity} of {item.quantity} quoted
+          </Text>
+        )}
+      </View>
     </View>
   );
 }
@@ -107,6 +158,39 @@ export function BooklistCard({
   publishing = false,
 }: Props) {
   const [open, setOpen] = useState(defaultExpanded);
+  /**
+   * The photo lives in a private bucket, so it cannot be rendered from
+   * its stored path — it has to be signed first, and only when someone
+   * actually asks to see it. Most cards are never opened; a signed URL
+   * nobody looks at is a wasted round trip on a phone.
+   */
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const [photoOpen, setPhotoOpen] = useState(false);
+  const [photoLoading, setPhotoLoading] = useState(false);
+  const [photoError, setPhotoError] = useState<string | null>(null);
+
+  const openPhoto = useCallback(async () => {
+    if (!booklist.image_path) return;
+    setPhotoOpen(true);
+    // Signed once per card. The URL outlives the time anyone spends
+    // looking at it, so re-signing on every open would be waste.
+    if (photoUrl) return;
+
+    setPhotoLoading(true);
+    setPhotoError(null);
+    try {
+      const url = await signBooklistImage(booklist.image_path);
+      if (!url) throw new Error('That photo could not be opened.');
+      setPhotoUrl(url);
+    } catch (e) {
+      setPhotoError((e as Error)?.message ?? 'That photo could not be opened.');
+    } finally {
+      // Unconditional: a failed signature must not leave a spinner
+      // turning over an empty modal.
+      setPhotoLoading(false);
+    }
+  }, [booklist.image_path, photoUrl]);
+
   const status = STATUS_COPY[booklist.status];
   const liveQuotes = booklist.quotes.filter((q) => q.status === 'sent').length;
 
@@ -130,11 +214,26 @@ export function BooklistCard({
   }, [booklist.groups]);
 
   const isDraft = booklist.status === 'draft';
+  /** Still out with shops: nobody has been paid and quotes may still land. */
+  const isAwaitingQuotes =
+    booklist.status === 'pending_quote' || booklist.status === 'quoted';
   // Editing and deleting stay available right up until a vendor commits
   // time to the list. `requests_delete_own` draws the same line in the
   // database, so a button shown past this point would fail at the policy
   // rather than at the UI.
   const isEditable = isDraft || booklist.status === 'pending_quote';
+
+  // A quote is in play once any line was priced from one, or once the
+  // headline figure itself came from a quote. Below that, a line with no
+  // money on it is still awaiting an answer rather than skipped.
+  const hasPricingQuote =
+    booklist.totalSource === 'quote' ||
+    booklist.totalSource === 'order' ||
+    booklist.items.some((i) => i.priceSource === 'quote');
+
+  // 'none' means no quote and no buyer estimate: there is no figure to
+  // headline, so the whole block goes rather than showing a bare dash.
+  const hasTotal = booklist.totalSource !== 'none' && booklist.estimatedTotal > 0;
 
   const totalCaption =
     booklist.totalSource === 'order'
@@ -189,23 +288,53 @@ export function BooklistCard({
             {liveQuotes > 0 && (
               <Chip label={`${liveQuotes} quote${liveQuotes === 1 ? '' : 's'}`} tone="info" />
             )}
-            {/* Only the direct case earns a chip. Open market is the
-                default and the overwhelming majority, so badging it
-                would add a word to every card and distinguish nothing.
-                Undefined means this database has no dispatch_type column
-                yet, which reads as open market — the old behaviour. */}
-            {booklist.dispatch_type === 'direct' && (
-              <Chip label="Direct to one shop" tone="info" icon="storefront-outline" />
+            {/* Where this list went, named.
+                Keyed off target_vendor_id rather than dispatch_type: the
+                id is on every database, dispatch_type only after
+                bookshops_dispatch_routing.sql, and gating on the latter
+                meant this badge never appeared at all. */}
+            {booklist.target_vendor_id ? (
+              // A named shop stays worth showing at every stage — it is
+              // who the buyer is dealing with, ordered or not.
+              !isDraft && (
+                <Chip
+                  label={`Direct to: ${booklist.target_vendor?.store_name ?? 'one shop'}`}
+                  tone="info"
+                  icon="storefront-outline"
+                />
+              )
+            ) : (
+              // "Sent to nearby shops" is a statement about a list still
+              // out for quotes. Once it is ordered — or was never sent —
+              // it describes nothing that is still happening, and next to
+              // an order chip it reads as though shops are still bidding
+              // on something already bought.
+              isAwaitingQuotes && <Chip label="Sent to nearby shops" icon="business-outline" />
             )}
-            {booklist.image_path && <Chip label="Photo attached" icon="image-outline" />}
+            {booklist.image_path && (
+              <Pressable
+                onPress={openPhoto}
+                hitSlop={6}
+                style={({ pressed }) => pressed && styles.pressed}
+                accessibilityRole="button"
+                accessibilityLabel="View the attached booklist photo"
+              >
+                <Chip label="Photo attached" icon="image-outline" />
+              </Pressable>
+            )}
           </View>
         </View>
 
         <View style={styles.totalWrap}>
-          <Text style={styles.totalCaption}>{totalCaption}</Text>
-          <Text style={styles.total}>
-            {booklist.estimatedTotal > 0 ? formatNaira(booklist.estimatedTotal) : '—'}
-          </Text>
+          {/* No quote, no total. A caption over a dash is a price the
+              buyer cannot act on, and it reads as though something has
+              gone wrong rather than as "no shop has answered yet". */}
+          {hasTotal && (
+            <>
+              <Text style={styles.totalCaption}>{totalCaption}</Text>
+              <Text style={styles.total}>{formatNaira(booklist.estimatedTotal)}</Text>
+            </>
+          )}
           <Ionicons
             name={open ? 'chevron-up' : 'chevron-down'}
             size={16}
@@ -236,7 +365,12 @@ export function BooklistCard({
                   </Text>
                 </View>
                 {group.items.map((item) => (
-                  <ItemRow key={item.id} item={item} serial={serials.get(item.id) ?? 0} />
+                  <ItemRow
+                    key={item.id}
+                    item={item}
+                    serial={serials.get(item.id) ?? 0}
+                    hasQuote={hasPricingQuote}
+                  />
                 ))}
                 {group.unpricedCount > 0 && (
                   <Text style={styles.groupNote}>
@@ -247,9 +381,26 @@ export function BooklistCard({
             ))
           )}
 
-          {booklist.hasUnpricedItems && booklist.totalSource === 'items' && (
+          {booklist.unavailableCount > 0 && (
+            <Text style={styles.caveat}>
+              {booklist.unavailableCount} line{booklist.unavailableCount === 1 ? '' : 's'} out of
+              stock at this shop — not included in the total.
+            </Text>
+          )}
+
+          {booklist.hasUnpricedItems && booklist.totalSource !== 'none' && (
             <Text style={styles.caveat}>
               This total covers only the lines that have a price — it isn't the full cost yet.
+            </Text>
+          )}
+
+          {/* quotes.total_price is kept equal to the sum of the quote's
+              available lines by a database trigger, so this should never
+              fire. If it does, the two numbers on screen disagree and
+              saying so is better than picking one and hoping. */}
+          {!booklist.totalMatchesLines && (
+            <Text style={styles.caveat}>
+              The shop's total doesn't match these lines. Open the quote before paying.
             </Text>
           )}
 
@@ -320,6 +471,60 @@ export function BooklistCard({
           )}
         </View>
       )}
+
+      {/* The original photo, full size.
+          Mounted only while open so a page of cards does not hold a
+          page of decoded images in memory. */}
+      <Modal
+        visible={photoOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPhotoOpen(false)}
+      >
+        <Pressable
+          style={styles.lightbox}
+          onPress={() => setPhotoOpen(false)}
+          accessibilityRole="button"
+          accessibilityLabel="Close the photo"
+        >
+          {/* Swallows the press so tapping the picture itself does not
+              close the thing you are trying to look at. */}
+          <Pressable style={styles.lightboxInner} onPress={() => {}}>
+            <View style={styles.lightboxHead}>
+              <Text style={styles.lightboxTitle} numberOfLines={1}>
+                {booklist.school_name || 'Booklist photo'}
+              </Text>
+              <Pressable
+                onPress={() => setPhotoOpen(false)}
+                hitSlop={10}
+                accessibilityRole="button"
+                accessibilityLabel="Close"
+              >
+                <Ionicons name="close" size={22} color={colors.onNavy} />
+              </Pressable>
+            </View>
+
+            {photoLoading ? (
+              <View style={styles.lightboxState}>
+                <ActivityIndicator color={colors.onNavy} />
+                <Text style={styles.lightboxNote}>Opening the photo…</Text>
+              </View>
+            ) : photoError ? (
+              <View style={styles.lightboxState}>
+                <Ionicons name="alert-circle-outline" size={22} color={colors.onNavy} />
+                <Text style={styles.lightboxNote}>{photoError}</Text>
+              </View>
+            ) : photoUrl ? (
+              <Image
+                source={{ uri: photoUrl }}
+                style={styles.lightboxImage}
+                resizeMode="contain"
+                accessibilityLabel={`The booklist photo for ${booklist.school_name}`}
+              />
+            ) : null}
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -404,9 +609,40 @@ const styles = StyleSheet.create({
   },
   itemQtyText: { fontSize: font.xs, fontWeight: '800', color: colors.navy },
   itemTitle: { fontSize: font.md, color: colors.text },
+  itemAuthor: { fontSize: font.xs, color: colors.textMuted, marginTop: 1 },
+  itemAuthorMissing: { color: colors.textFaint, fontStyle: 'italic' },
   itemParsed: { fontSize: font.xs, color: colors.orangeDark, fontStyle: 'italic', marginTop: 1 },
+  itemPriceWrap: { alignItems: 'flex-end', minWidth: 78 },
   itemPrice: { fontSize: font.md, fontWeight: '700', color: colors.text },
   itemPriceMuted: { color: colors.textFaint, fontWeight: '500', fontSize: font.sm },
+  itemPriceOut: { color: colors.textMuted, fontWeight: '600', fontSize: font.sm },
+  itemUnitPrice: { fontSize: font.xs, color: colors.textMuted, marginTop: 1 },
+  itemQtyWarn: { fontSize: font.xs, color: colors.warning, marginTop: 1 },
+
+  lightbox: {
+    flex: 1,
+    backgroundColor: 'rgba(9,17,34,0.92)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: spacing.lg,
+  },
+  lightboxInner: { width: '100%', maxWidth: 720, gap: spacing.md },
+  lightboxHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+  },
+  lightboxTitle: { flex: 1, fontSize: font.md, fontWeight: '700', color: colors.onNavy },
+  lightboxImage: {
+    width: '100%',
+    height: 460,
+    maxHeight: '80%',
+    borderRadius: radius.md,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+  },
+  lightboxState: { alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.xxl },
+  lightboxNote: { fontSize: font.sm, color: colors.onNavy, textAlign: 'center' },
 
   caveat: { fontSize: font.xs, color: colors.warning, marginTop: spacing.md, lineHeight: 16 },
 

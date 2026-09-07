@@ -17,6 +17,7 @@ import {
   parseBooklistImage,
   draftImageKey,
   blankItem,
+  OCR_UNREADABLE_NOTE,
   guessCategory,
   DRAFT_STATUS,
   PUBLISHED_STATUS,
@@ -25,6 +26,13 @@ import {
   type ParsedItem,
 } from '../../lib/booklistUpload';
 import { QuantityStepper } from './QuantityStepper';
+import {
+  AUTHOR_PLACEHOLDER,
+  AUTHOR_REQUIRED_MESSAGE,
+  authorRequiredFor,
+  lineProblem,
+  validateLines,
+} from '../../lib/booklistValidation';
 import { colors, spacing, radius, font, shadow } from '../../theme';
 import { useLayout } from '../../hooks/useLayout';
 
@@ -33,6 +41,14 @@ interface Props {
   userId: string | null;
   /** The photo the hub already picked. Upload and parsing start from it. */
   image: PickedImage | null;
+  /**
+   * What the buyer named the list in the chooser, if anything.
+   *
+   * A starting value for the School field, not an override: if the
+   * parser reads a school off the photo that is better evidence than a
+   * label typed before the photo was even looked at.
+   */
+  initialSchool?: string;
   onClose: () => void;
   /** Called after the request row and its items exist. */
   onSubmitted: (message: string) => void | Promise<void>;
@@ -51,12 +67,19 @@ type Pending = 'draft' | 'publish' | null;
  * book_requests row is written while this modal is open — a buyer who
  * closes it leaves nothing behind but an orphaned object in storage.
  *
- * That is the opposite of CreateBooklistModal, which inserts first and
+ * That is the opposite of BooklistDetailsModal, which inserts first and
  * treats the photo as best-effort decoration. It is the right trade for
  * a typed list and the wrong one for a parsed one: OCR gets titles
  * wrong, and a wrong title is a wrong quote.
  */
-export function BooklistReviewModal({ visible, userId, image, onClose, onSubmitted }: Props) {
+export function BooklistReviewModal({
+  visible,
+  userId,
+  image,
+  initialSchool = '',
+  onClose,
+  onSubmitted,
+}: Props) {
   const { isMobile } = useLayout();
 
   const [phase, setPhase] = useState<Phase>('working');
@@ -70,6 +93,22 @@ export function BooklistReviewModal({ visible, userId, image, onClose, onSubmitt
   const [items, setItems] = useState<ParsedItem[]>([]);
   const [imagePath, setImagePath] = useState<string | null>(null);
   const [showPhoto, setShowPhoto] = useState(false);
+  /**
+   * Did the parser actually read this photo?
+   *
+   * Null until it has answered. False means the table below is the
+   * buyer's own typing, not a reading of their list — which changes what
+   * the screen should say and whether the photo is worth showing them
+   * open by default.
+   */
+  const [readOk, setReadOk] = useState<boolean | null>(null);
+  /**
+   * Show the per-line errors only once they have tried to submit.
+   *
+   * Marking a line red the instant a title is typed — before the buyer
+   * has reached the author field — is nagging, not helping.
+   */
+  const [showProblems, setShowProblems] = useState(false);
 
   const reset = useCallback(() => {
     setPhase('working');
@@ -82,6 +121,8 @@ export function BooklistReviewModal({ visible, userId, image, onClose, onSubmitt
     setItems([]);
     setImagePath(null);
     setShowPhoto(false);
+    setReadOk(null);
+    setShowProblems(false);
   }, []);
 
   /**
@@ -117,21 +158,38 @@ export function BooklistReviewModal({ visible, userId, image, onClose, onSubmitt
 
       try {
         setStep('Reading your list…');
+        // parseBooklistImage never throws and never invents: a photo it
+        // could not read comes back with an empty list and a note. There
+        // is no fixture path any more — a booklist of books the buyer
+        // never asked for is worse than no booklist at all, because it
+        // gets quoted and paid for.
         const result = path
           ? await parseBooklistImage(path)
-          : { school_name: '', class_level: '', items: [], parsed: false, note: '' };
+          : { school_name: '', class_level: '', items: [], parsed: false, note: OCR_UNREADABLE_NOTE };
         if (cancelled) return;
 
-        setSchool(result.school_name);
+        const read = result.parsed && result.items.length > 0;
+        setReadOk(read);
+        // The photo wins when it names a school; the buyer's own label
+        // fills the gap when it does not, so they never type it twice.
+        setSchool(result.school_name || initialSchool.trim());
         setClassLevel(result.class_level);
-        setItems(result.items.length ? result.items : [blankItem()]);
+        // One empty row either way, so there is somewhere to start
+        // typing. Nothing is pre-filled that did not come off the photo.
+        setItems(read ? result.items : [blankItem()]);
         if (result.note) setNotice(result.note);
+        // Nothing was read, so the photo is the only copy of the list
+        // the buyer has in front of them. Open it — they are about to
+        // type from it.
+        if (!read) setShowPhoto(true);
       } catch (e) {
         if (cancelled) return;
-        setNotice(
-          `The list could not be read automatically (${(e as Error).message}). Add the books yourself and vendors will quote them.`
-        );
+        setReadOk(false);
+        setSchool(initialSchool.trim());
+        setNotice(OCR_UNREADABLE_NOTE);
         setItems([blankItem()]);
+        setShowPhoto(true);
+        console.warn('[booklist] parse failed:', e);
       } finally {
         if (!cancelled) setPhase('review');
       }
@@ -140,7 +198,11 @@ export function BooklistReviewModal({ visible, userId, image, onClose, onSubmitt
     return () => {
       cancelled = true;
     };
-  }, [visible, image, userId, reset]);
+    // Keyed on image.uri, not the object: a re-render that hands over a
+    // new wrapper for the SAME photo must not upload and parse it twice,
+    // and a genuinely new photo always has a new uri.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, image?.uri, userId, initialSchool, reset]);
 
   /* ---------------- item editing ---------------- */
 
@@ -157,8 +219,31 @@ export function BooklistReviewModal({ visible, userId, image, onClose, onSubmitt
   }
 
   const selected = items.filter((item) => item.selected && item.title.trim().length > 0);
+
+  /**
+   * Only ticked lines are validated. An unticked line means "I already
+   * own this" and is never saved, so demanding its publisher would block
+   * the buyer over a book they are not even ordering.
+   */
+  const verdict = validateLines(
+    items.filter((item) => item.selected),
+    (item) => item.id
+  );
+  const blocked = new Set(verdict.missingAuthor);
+  /**
+   * Sending the photo alone is a real option, not a degraded one.
+   *
+   * When nothing could be read, the note tells the buyer they can "send
+   * the raw photo directly to shops" — so the button has to honour that.
+   * A shop opening the request sees the photo and quotes off it, which
+   * is exactly what happens over WhatsApp today.
+   */
+  const photoOnly = selected.length === 0 && Boolean(imagePath);
   const canSubmit =
-    phase === 'review' && Boolean(userId) && school.trim().length > 0 && selected.length > 0;
+    phase === 'review' &&
+    Boolean(userId) &&
+    school.trim().length > 0 &&
+    (verdict.ok || photoOnly);
 
   /* ---------------- submission ---------------- */
 
@@ -170,7 +255,18 @@ export function BooklistReviewModal({ visible, userId, image, onClose, onSubmitt
    * looking at a success message for a list no vendor can see.
    */
   async function handleSave(publish: boolean) {
-    if (!canSubmit || !userId) return;
+    if (!userId || phase !== 'review') return;
+
+    // Re-checked here, not just on the button: the button is one way in,
+    // and a line can be edited back into an invalid state between a
+    // render and a press.
+    if (!photoOnly && !verdict.ok) {
+      setShowProblems(true);
+      setError(verdict.message);
+      return;
+    }
+    if (!canSubmit) return;
+    setShowProblems(false);
     setPhase('submitting');
     setPending(publish ? 'publish' : 'draft');
     setError(null);
@@ -199,16 +295,24 @@ export function BooklistReviewModal({ visible, userId, image, onClose, onSubmitt
       const rows = selected.map((item, i) => ({
         request_id: requestId,
         title: item.title.trim(),
-        author: item.author.trim() || null,
+        // Required for books now, so it is written as a value rather
+        // than coalesced to null. Stationery and uniform lines legitimately
+        // have none and still store ''.
+        author: item.author.trim(),
         category: item.title.trim() ? guessCategory(item.title) : item.category,
         quantity: item.quantity,
-        // True only for lines that came back from the parser untouched
-        // in origin — it flags rows a vendor should read with suspicion.
-        parsed: item.id.startsWith('mock-') || item.id.startsWith('parsed-'),
+        // True only for lines the parser produced — it flags rows a
+        // vendor should read with suspicion. A line the buyer typed is
+        // not a guess and must not be marked as one.
+        parsed: item.id.startsWith('parsed-'),
         position: i,
       }));
 
-      const { error: itemsError } = await supabase.from('book_request_items').insert(rows);
+      // Photo-only: nothing to insert. An empty insert is not a no-op in
+      // PostgREST, it is a 400.
+      const { error: itemsError } = rows.length
+        ? await supabase.from('book_request_items').insert(rows)
+        : { error: null };
 
       if (itemsError) {
         // bookshops_booklist_author.sql may not have been run on this
@@ -227,10 +331,13 @@ export function BooklistReviewModal({ visible, userId, image, onClose, onSubmitt
       }
 
       const count = `${selected.length} item${selected.length === 1 ? '' : 's'}`;
+      const what = rows.length ? count : 'the photo only';
       await onSubmitted(
         publish
-          ? `Booklist sent for quotes — ${count} for ${school.trim()}.`
-          : `Draft saved — ${count} for ${school.trim()}. Publish it when you're ready for quotes.`
+          ? `Booklist sent for quotes — ${what} for ${school.trim()}.${
+              rows.length ? '' : ' Shops will quote from the picture.'
+            }`
+          : `Draft saved — ${what} for ${school.trim()}. Publish it when you're ready for quotes.`
       );
       reset();
       onClose();
@@ -328,6 +435,11 @@ export function BooklistReviewModal({ visible, userId, image, onClose, onSubmitt
                     // on the device, so it renders instantly and still
                     // works if the upload failed.
                     <Image
+                      // Keyed by the uri so a second booklist remounts
+                      // the view rather than reusing the first one's
+                      // decoded bitmap. Belt and braces against showing
+                      // the previous photo.
+                      key={image.uri}
                       source={{ uri: image.uri }}
                       style={styles.photo}
                       resizeMode="contain"
@@ -352,7 +464,20 @@ export function BooklistReviewModal({ visible, userId, image, onClose, onSubmitt
                 </Text>
               </View>
 
-              {items.map((item) => (
+              {/* Said once, above the list, rather than under every row:
+                  a hint repeated twelve times is wallpaper. */}
+              <Text style={styles.itemsHint}>
+                Give the author or publisher for each book — it is what tells a shop which
+                edition to quote.
+              </Text>
+
+              {items.map((item) => {
+                const needsAuthor = item.selected && authorRequiredFor(item);
+                const authorMissing = showProblems && blocked.has(item.id);
+                const titleMissing =
+                  showProblems && item.selected && lineProblem(item) === 'title';
+
+                return (
                 <View key={item.id} style={[styles.row, !item.selected && styles.rowOff]}>
                   <Pressable
                     onPress={() => patchItem(item.id, { selected: !item.selected })}
@@ -376,18 +501,39 @@ export function BooklistReviewModal({ visible, userId, image, onClose, onSubmitt
                       onChangeText={(title) => patchItem(item.id, { title })}
                       placeholder="Book or item title"
                       placeholderTextColor={colors.textFaint}
-                      style={[styles.rowInput, styles.rowTitle]}
+                      style={[
+                        styles.rowInput,
+                        styles.rowTitle,
+                        titleMissing && styles.rowInputInvalid,
+                      ]}
                       multiline
                       accessibilityLabel="Title"
                     />
                     <TextInput
                       value={item.author}
                       onChangeText={(author) => patchItem(item.id, { author })}
-                      placeholder="Author or publisher (optional)"
-                      placeholderTextColor={colors.textFaint}
-                      style={[styles.rowInput, styles.rowAuthor]}
-                      accessibilityLabel="Author or publisher"
+                      placeholder={AUTHOR_PLACEHOLDER}
+                      placeholderTextColor={authorMissing ? colors.danger : colors.textFaint}
+                      style={[
+                        styles.rowInput,
+                        styles.rowAuthor,
+                        authorMissing && styles.rowInputInvalid,
+                      ]}
+                      accessibilityLabel={
+                        needsAuthor ? 'Author or publisher, required' : 'Author or publisher'
+                      }
+                      accessibilityHint={
+                        needsAuthor
+                          ? 'Shops need this to quote the right edition'
+                          : undefined
+                      }
                     />
+                    {authorMissing && (
+                      <Text style={styles.rowError}>{AUTHOR_REQUIRED_MESSAGE}</Text>
+                    )}
+                    {titleMissing && (
+                      <Text style={styles.rowError}>Give this line a title, or remove it.</Text>
+                    )}
 
                     {/* Under the fields rather than beside them: on a
                         phone a stepper in the same row as the title
@@ -412,7 +558,8 @@ export function BooklistReviewModal({ visible, userId, image, onClose, onSubmitt
                     <Ionicons name="trash-outline" size={18} color={colors.danger} />
                   </Pressable>
                 </View>
-              ))}
+                );
+              })}
 
               <Pressable
                 onPress={addItem}
@@ -483,7 +630,7 @@ export function BooklistReviewModal({ visible, userId, image, onClose, onSubmitt
                 </View>
               ) : (
                 <Text style={styles.btnPrimaryText} numberOfLines={1}>
-                  Send to Vendors{selected.length > 0 ? ` (${selected.length})` : ''}
+                  {photoOnly ? 'Send Photo to Vendors' : `Send to Vendors (${selected.length})`}
                 </Text>
               )}
             </Pressable>
@@ -587,6 +734,14 @@ const styles = StyleSheet.create({
     borderRadius: radius.sm,
   },
   rowTitle: { fontSize: font.md, fontWeight: '600', minHeight: 34 },
+  rowInputInvalid: { borderColor: colors.danger, backgroundColor: '#FDECEA' },
+  rowError: { fontSize: font.xs, color: colors.danger, marginTop: 3, lineHeight: 15 },
+  itemsHint: {
+    fontSize: font.xs,
+    color: colors.textMuted,
+    lineHeight: 16,
+    marginBottom: spacing.sm,
+  },
   rowAuthor: { fontSize: font.sm, color: colors.textMuted },
   rowMeta: { paddingHorizontal: spacing.sm, paddingTop: 6 },
   delete: { paddingTop: 8, paddingHorizontal: 2 },

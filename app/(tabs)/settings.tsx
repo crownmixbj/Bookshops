@@ -27,6 +27,7 @@ import { useSettings, type SaveState } from '../../hooks/useSettings';
 import { colors, spacing, radius, font } from '../../theme';
 import type { ThemePreference } from '../../types/db';
 import { Footer } from '../../components/layout/Footer';
+import { WorkspaceFooter } from '../../components/layout/WorkspaceFooter';
 import { useShell } from '../../components/layout/ShellContext';
 
 const MIN_PASSWORD = 8;
@@ -514,7 +515,13 @@ export default function SettingsScreen() {
               </View>
             </View>
           )}
-          <Footer audience={isAdmin ? 'admin' : isVendor ? 'vendor' : 'buyer'} />
+          {/* Settings is shared by all three roles, so the footer
+              follows whoever is looking at it. */}
+          {isVendor ? (
+            <WorkspaceFooter />
+          ) : (
+            <Footer audience={isAdmin ? 'admin' : 'buyer'} />
+          )}
         </ScrollView>
     </>
   );

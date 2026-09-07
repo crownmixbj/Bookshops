@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from '../utils/supabase';
+import { SETTLED_PAYMENT_STATUSES } from '../types/db';
+import type { PaymentStatus, FulfillmentStatus } from '../types/db';
 
 /**
  * Read models for the four admin management screens.
@@ -67,7 +69,12 @@ export function useAdminAnalytics() {
     }
 
     const orders = (orderRes.data ?? []) as { amount: number | null; payment_status: string; delivery_city: string | null }[];
-    const paid = orders.filter((o) => o.payment_status === 'paid');
+    // Escrowed money has left the buyer's account, so it counts as
+    // taken. Whether it has reached the vendor is a payout question,
+    // which is what escrow_released is for.
+    const paid = orders.filter((o) =>
+      (SETTLED_PAYMENT_STATUSES as string[]).includes(o.payment_status)
+    );
     const gross = paid.reduce((s, o) => s + Number(o.amount ?? 0), 0);
     // payout_settings only exists after bookshops_payouts.sql; absent
     // means no commission has been configured, which is 0.
@@ -255,8 +262,11 @@ export function useBooklistDetail(requestId: string | null) {
 // 3. Orders overview
 // ============================================================
 
-export type PaymentStatus = 'pending' | 'paid' | 'failed' | 'refunded';
-export type FulfillmentStatus = 'processing' | 'ready' | 'dispatched' | 'delivered' | 'cancelled';
+// Re-exported rather than redeclared. These were duplicated here, and a
+// duplicate union is a union that will disagree with the database the
+// first time someone adds a status to only one of them — which is
+// exactly what happened when escrow was added.
+export type { PaymentStatus, FulfillmentStatus } from '../types/db';
 
 export interface AdminOrderRow {
   id: string;
@@ -339,7 +349,9 @@ export function useAdminOrders() {
         delivery_name: (o.delivery_name as string) ?? null,
         delivery_phone: (o.delivery_phone as string) ?? null,
         quote_id: quoteId,
-        held: payment === 'paid' && !['delivered', 'cancelled'].includes(fulfil),
+        held:
+          (SETTLED_PAYMENT_STATUSES as string[]).includes(payment) &&
+          !['delivered', 'cancelled'].includes(fulfil),
       };
     }));
     setLoading(false);

@@ -3,6 +3,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, router } from 'expo-router';
 import { BuyerPage, Panel, Skeleton, ErrorPanel } from '../../components/buyer/BuyerPage';
 import { useBooklistDetail } from '../../hooks/useBuyerDetail';
+import { sumLineTotals } from '../../lib/booklistPricing';
 import { colors, spacing, radius, font, formatNaira } from '../../theme';
 
 const STATUS_LABEL: Record<string, string> = {
@@ -48,10 +49,14 @@ export default function BooklistDetailScreen() {
     );
   }
 
-  // Only priced lines contribute; an unpriced line is not zero naira,
-  // it is unknown, and adding it as zero would understate the total.
-  const priced = items.filter((i) => i.unit_price != null);
-  const estimate = priced.reduce((sum, i) => sum + Number(i.unit_price) * i.quantity, 0);
+  // Only priced, in-stock lines contribute; an unpriced line is not zero
+  // naira, it is unknown, and adding it as zero would understate the
+  // total. Prices come from the pricing quote's quote_items — the
+  // request rows themselves carry none.
+  const priced = items.filter((i) => i.lineTotal != null);
+  const awaiting = items.filter((i) => i.isAvailable && i.lineTotal == null).length;
+  const outOfStock = items.filter((i) => !i.isAvailable).length;
+  const estimate = sumLineTotals(items);
 
   return (
     <BuyerPage
@@ -71,7 +76,8 @@ export default function BooklistDetailScreen() {
           priced.length ? (
             <Text style={styles.estimate}>
               {formatNaira(estimate)}
-              {priced.length < items.length ? ` · ${items.length - priced.length} unpriced` : ''}
+              {awaiting > 0 ? ` · ${awaiting} unpriced` : ''}
+              {outOfStock > 0 ? ` · ${outOfStock} out of stock` : ''}
             </Text>
           ) : null
         }
@@ -95,8 +101,17 @@ export default function BooklistDetailScreen() {
                     {item.parsed ? ' · read from photo' : ''}
                   </Text>
                 </View>
-                <Text style={styles.itemPrice}>
-                  {item.unit_price == null ? '—' : formatNaira(Number(item.unit_price) * item.quantity)}
+                <Text
+                  style={[
+                    styles.itemPrice,
+                    item.lineTotal == null && styles.itemPriceMuted,
+                  ]}
+                >
+                  {!item.isAvailable
+                    ? 'Out of stock'
+                    : item.lineTotal == null
+                    ? 'Awaiting quote'
+                    : formatNaira(item.lineTotal)}
                 </Text>
               </View>
             ))}
@@ -155,6 +170,7 @@ const styles = StyleSheet.create({
   itemTitle: { fontSize: font.md, fontWeight: '600', color: colors.text },
   itemMeta: { fontSize: font.sm, color: colors.textMuted, marginTop: 1 },
   itemPrice: { fontSize: font.md, fontWeight: '700', color: colors.text },
+  itemPriceMuted: { color: colors.textFaint, fontWeight: '500', fontSize: font.sm },
 
   thumb: {
     width: 34, height: 34, borderRadius: radius.sm, backgroundColor: colors.surfaceMuted,

@@ -37,7 +37,15 @@ function activeKeyFor(pathname: string, role: ShellRole): string {
     return m ? m[1] : '';
   }
   if (role === 'admin') {
-    if (pathname === '/admin') return 'dashboard';
+    // '/admin' is now a redirect to '/admin/dashboard'; both should
+    // light up Dashboard, and so should the brief moment on the old URL.
+    if (pathname === '/admin' || pathname === '/admin/dashboard') return 'dashboard';
+    // An admin who reaches the shared /settings (rather than
+    // /admin/settings) is still in the Settings section.
+    if (pathname === '/settings') return 'settings';
+    // The two renamed sections, while an old link is redirecting.
+    if (pathname === '/admin/payments') return 'financials';
+    if (pathname === '/admin/support') return 'disputes';
     if (pathname === '/settings') return 'settings';
     // '/admin/vendors' -> 'vendors'. The nav key is the last URL
     // segment, so a new admin screen highlights itself with no wiring.

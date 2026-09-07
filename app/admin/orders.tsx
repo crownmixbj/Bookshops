@@ -30,6 +30,8 @@ const TABS: { key: Filter; label: string }[] = [
 
 const PAYMENT: Record<PaymentStatus, { label: string; tone: Tone }> = {
   pending: { label: 'Pending', tone: 'warn' },
+  escrow_held: { label: 'In escrow', tone: 'info' },
+  escrow_released: { label: 'Released', tone: 'good' },
   paid: { label: 'Paid', tone: 'good' },
   failed: { label: 'Failed', tone: 'bad' },
   refunded: { label: 'Refunded', tone: 'bad' },
@@ -69,7 +71,7 @@ export default function AdminOrdersScreen() {
       .filter((r) => {
         switch (tab) {
           case 'all': return true;
-          case 'pending': return r.payment_status === 'pending';
+          case 'pending': return r.payment_status === 'pending' || r.payment_status === 'failed';
           case 'held': return r.held;
           case 'dispatched': return r.fulfillment_status === 'dispatched';
           case 'delivered': return r.fulfillment_status === 'delivered';
@@ -151,7 +153,9 @@ export default function AdminOrdersScreen() {
             )}
 
             {visible.map((r) => {
-              const pay = PAYMENT[r.payment_status];
+              // Defensive: a status this build has not heard of should render as
+              // itself rather than crash the whole orders table.
+              const pay = PAYMENT[r.payment_status] ?? { label: r.payment_status, tone: 'warn' as Tone };
               const ship = FULFILMENT[r.fulfillment_status];
               const view = (
                 <Pressable

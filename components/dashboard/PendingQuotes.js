@@ -1,13 +1,32 @@
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { Card, Pill } from './Card';
+import { Card } from './Card';
 import { colors, spacing, radius, font, formatNaira } from '../../theme';
 
-function Stars({ rating = 0 }) {
+/**
+ * A shop's rating, or a plain statement that it has none.
+ *
+ * Null is not zero and it is not 4.8. A new shop on a new marketplace
+ * has no reviews, and drawing five hollow stars beside "0.0" reads as a
+ * bad shop rather than a new one — while the fixture this replaced drew
+ * a confident 4.8 on every vendor alike.
+ */
+function Stars({ rating, reviewCount = 0 }) {
+  if (rating == null) {
+    return <Text style={styles.noRating}>No ratings yet</Text>;
+  }
+
   const full = Math.floor(rating);
   const half = rating - full >= 0.5;
   return (
-    <View style={styles.stars} accessibilityLabel={`Rated ${rating} out of 5`}>
+    <View
+      style={styles.stars}
+      accessibilityLabel={
+        reviewCount > 0
+          ? `Rated ${rating} out of 5 from ${reviewCount} review${reviewCount === 1 ? '' : 's'}`
+          : `Rated ${rating} out of 5`
+      }
+    >
       {[0, 1, 2, 3, 4].map((i) => (
         <Ionicons
           key={i}
@@ -17,6 +36,7 @@ function Stars({ rating = 0 }) {
         />
       ))}
       <Text style={styles.ratingText}>{Number(rating).toFixed(1)}</Text>
+      {reviewCount > 0 && <Text style={styles.ratingText}>({reviewCount})</Text>}
     </View>
   );
 }
@@ -38,20 +58,16 @@ function QuoteRow({ quote, onPress }) {
         <Text style={styles.vendor} numberOfLines={1}>
           {quote.vendor_name}
         </Text>
-        <Stars rating={quote.rating} />
-        {!!quote.tagline && <Text style={styles.tagline}>{quote.tagline}</Text>}
+        <Stars rating={quote.rating} reviewCount={quote.review_count} />
       </View>
       <Text style={styles.price}>{formatNaira(quote.total_price)}</Text>
     </Pressable>
   );
 }
 
-export function PendingQuotes({ quotes, onSelectQuote, onCreatePress, loading }) {
+export function PendingQuotes({ quotes, onSelectQuote, loading }) {
   return (
-    <Card
-      title="My Pending Quotes"
-      right={quotes?.[0]?.demo ? <Pill label="Demo data" tone="accent" /> : null}
-    >
+    <Card title="My Pending Quotes">
       <Text style={styles.sub}>Vendors who have responded to your booklists</Text>
 
       {loading ? (
@@ -68,24 +84,16 @@ export function PendingQuotes({ quotes, onSelectQuote, onCreatePress, loading })
         </View>
       ) : (
         <View style={styles.empty}>
+          <View style={styles.emptyIcon}>
+            <Ionicons name="time-outline" size={22} color={colors.textMuted} />
+          </View>
+          <Text style={styles.emptyTitle}>No quotes pending</Text>
           <Text style={styles.emptyText}>
-            No quotes yet. Vendors usually respond within a few hours.
+            When vendors submit offers for your active booklists, they will appear here for
+            comparison and checkout.
           </Text>
         </View>
       )}
-
-      <Pressable
-        onPress={onCreatePress}
-        style={({ pressed }) => [styles.cta, pressed && styles.ctaPressed]}
-        accessibilityRole="button"
-        // Without this a screen reader announces the icon glyph
-        // alongside the label. The navy tile above already names
-        // itself; this one did not.
-        accessibilityLabel="Create a new booklist"
-      >
-        <Ionicons name="add" size={16} color={colors.onNavy} />
-        <Text style={styles.ctaText}>Create New Booklist</Text>
-      </Pressable>
     </Card>
   );
 }
@@ -119,24 +127,28 @@ const styles = StyleSheet.create({
   vendor: { fontSize: font.md, fontWeight: '700', color: colors.text },
   stars: { flexDirection: 'row', alignItems: 'center', gap: 2 },
   ratingText: { fontSize: font.xs, color: colors.textMuted, marginLeft: 3, fontWeight: '600' },
-  tagline: { fontSize: font.xs, color: colors.textFaint },
+  noRating: { fontSize: font.xs, color: colors.textFaint },
   price: { fontSize: font.md, fontWeight: '800', color: colors.text },
 
-  empty: { paddingVertical: spacing.lg },
-  emptyText: { fontSize: font.md, color: colors.textMuted, textAlign: 'center' },
-
-  cta: {
-    marginTop: spacing.md,
-    backgroundColor: colors.orange,
-    borderRadius: radius.md,
-    paddingVertical: 11,
-    flexDirection: 'row',
+  empty: { paddingVertical: spacing.lg, alignItems: 'center', gap: spacing.sm },
+  emptyIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: spacing.sm,
+    backgroundColor: colors.surfaceMuted,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
-  ctaPressed: { backgroundColor: colors.orangeDark },
-  ctaText: { color: colors.onNavy, fontWeight: '700', fontSize: font.md },
+  emptyTitle: { fontSize: font.md, fontWeight: '700', color: colors.text },
+  emptyText: {
+    fontSize: font.sm,
+    color: colors.textMuted,
+    textAlign: 'center',
+    lineHeight: 19,
+    maxWidth: 320,
+  },
 
   skeleton: { height: 62, borderRadius: radius.md, backgroundColor: colors.surfaceMuted },
 });

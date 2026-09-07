@@ -7,7 +7,12 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "LOCI needs your camera so you can photograph a printed school booklist and get quotes on it.",
+        "NSPhotoLibraryUsageDescription": "LOCI needs access to your photos so you can send a picture of your school booklist to nearby bookshops."
+      },
+      "bundleIdentifier": "com.crownmixbj.BookShops"
     },
     "android": {
       "adaptiveIcon": {
@@ -15,7 +20,13 @@
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
-      }
+      },
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.RECORD_AUDIO"
+      ],
+      "package": "com.crownmixbj.BookShops"
     },
     "web": {
       "favicon": "./assets/favicon.png",
@@ -24,7 +35,14 @@
     },
     "scheme": "bookshops",
     "plugins": [
-      "expo-router"
+      "expo-router",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "LOCI needs access to your photos so you can send a picture of your school booklist to nearby bookshops.",
+          "cameraPermission": "LOCI needs your camera so you can photograph a printed school booklist and get quotes on it."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

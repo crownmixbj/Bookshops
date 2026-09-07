@@ -17,23 +17,24 @@ import { useLayout } from '../../hooks/useLayout';
  * to a screen that does not exist fails to compile instead of landing on
  * Expo Router's "Unmatched Route".
  *
- * Dashboard points at `/vendor`, the real request-queue screen, rather
- * than a `/vendor/dashboard` placeholder — there is no sense shipping an
- * empty page in front of the one screen that is actually built.
+ * Dashboard is `/vendor`, the vendor's role root, not `/vendor/dashboard`.
+ * ProfileMenu and every role gate send a vendor to `/vendor`, and the
+ * buyer dashboard is `/` for the same reason: each role lands on its own
+ * root rather than one segment inside it.
  *
- * Settings points at the shared `/settings`, which already branches on
- * role. A second vendor-only settings screen would be two places to
- * change the same preference.
+ * `/vendor/settings` is a redirect into the shared `/settings`, which
+ * already branches on role and holds the store fields. The specced URL
+ * works; there is still only one screen editing store details.
  */
 export type VendorRoute =
   | '/vendor'
-  | '/vendor/booklists'
+  | '/vendor/quotes'
   | '/vendor/orders'
-  | '/vendor/customers'
-  | '/vendor/messaging'
-  | '/vendor/analytics'
   | '/vendor/payouts'
-  | '/settings';
+  | '/vendor/messages'
+  | '/vendor/analytics'
+  | '/vendor/support'
+  | '/vendor/settings';
 
 export interface VendorNavItem {
   key: string;
@@ -44,15 +45,26 @@ export interface VendorNavItem {
   badge?: number;
 }
 
+/**
+ * The shop's day, in order: what is happening, work to answer, orders to
+ * pack, money, then the occasional things.
+ *
+ * Customers is deliberately gone. It was a placeholder, and a shop's
+ * customers are reached through the quote or order that involves them —
+ * a separate list of people with no action attached to them is a menu
+ * entry that never gets pressed twice.
+ */
 export const VENDOR_NAV: VendorNavItem[] = [
   { key: 'dashboard', label: 'Dashboard', icon: 'home-outline', route: '/vendor' },
-  { key: 'booklists', label: 'My Booklists', icon: 'bookmark-outline', route: '/vendor/booklists' },
-  { key: 'orders', label: 'Orders', icon: 'receipt-outline', route: '/vendor/orders' },
-  { key: 'customers', label: 'Customers', icon: 'people-outline', route: '/vendor/customers' },
-  { key: 'messaging', label: 'Messaging', icon: 'chatbubble-outline', route: '/vendor/messaging' },
-  { key: 'analytics', label: 'Analytics', icon: 'bar-chart-outline', route: '/vendor/analytics' },
+  // 'quotes' rather than 'booklists': what a shop does here is answer
+  // requests and track the answers, not keep lists of books.
+  { key: 'quotes', label: 'Requests & Quotes', icon: 'pricetags-outline', route: '/vendor/quotes' },
+  { key: 'orders', label: 'Orders', icon: 'cube-outline', route: '/vendor/orders' },
   { key: 'payouts', label: 'Payouts', icon: 'wallet-outline', route: '/vendor/payouts' },
-  { key: 'settings', label: 'Settings', icon: 'settings-outline', route: '/settings' },
+  { key: 'messages', label: 'Messaging', icon: 'chatbubble-outline', route: '/vendor/messages' },
+  { key: 'analytics', label: 'Analytics', icon: 'bar-chart-outline', route: '/vendor/analytics' },
+  { key: 'support', label: 'Support', icon: 'help-buoy-outline', route: '/vendor/support' },
+  { key: 'settings', label: 'Settings', icon: 'settings-outline', route: '/vendor/settings' },
   { key: 'logout', label: 'Logout', icon: 'log-out-outline', route: null },
 ];
 

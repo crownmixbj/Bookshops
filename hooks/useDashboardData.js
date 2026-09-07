@@ -1,13 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../utils/supabase';
 import { DRAFT_STATUS } from '../lib/booklistUpload';
-import {
-  MOCK_BOOKLIST_REQUESTS,
-  MOCK_QUOTES,
-  MOCK_FEATURED_SHOP,
-  MOCK_VENDOR_RATING_DEFAULT,
-  MOCK_VENDOR_RATINGS,
-} from '../lib/mockData';
+import { pickPricingQuote, priceBooklistItems } from '../lib/booklistPricing';
+import { getSessionUserId, subscribeToAuthReloads } from '../lib/loadState';
 
 /**
  * ============================================================
@@ -30,14 +25,25 @@ import {
  */
 
 /**
- * The statuses a vendor can see, and therefore the only ones that belong
- * in "Active Booklist Requests".
+ * What belongs in "Active Booklist Requests": lists that still need
+ * something to happen to them.
  *
- * Mirrors vendor_request_queue()'s filter plus 'ordered', which the queue
- * drops (nothing left to quote) but a buyer still wants on their
- * dashboard. 'cancelled' is excluded: it is archived, not active.
+ *   pending_quote  out with shops, waiting to be priced
+ *   quoted         priced, waiting for the buyer to choose
+ *
+ * 'ordered' used to be here too. It is not any more: an ordered list has
+ * become an order, My Orders is the screen that tracks orders, and
+ * carrying it in both places meant one purchase appeared twice — once
+ * where a buyer acts on it and once where they can only look at it.
+ * Nothing is lost by dropping it: useOrders reads the `orders` table
+ * directly, so every ordered list is on that screen already.
+ *
+ * 'draft' belongs to My Booklists; 'cancelled' is archived, not active.
  */
-const PUBLISHED_REQUEST_STATUSES = ['pending_quote', 'quoted', 'ordered'];
+const PUBLISHED_REQUEST_STATUSES = ['pending_quote', 'quoted'];
+
+/** Statuses that have left this card for the My Orders screen. */
+const ORDERED_REQUEST_STATUSES = ['ordered'];
 
 /** The project ref the client is actually pointed at, for error messages. */
 const PROJECT_REF =
@@ -49,8 +55,10 @@ const EMPTY = {
   email: null,
   requests: [],
   draftCount: 0,
+  orderedCount: 0,
   items: [],
   quotes: [],
+  quoteItems: [],
   vendors: [],
   orders: [],
 };
@@ -94,30 +102,60 @@ function parseItemBreakdown(breakdown) {
 
 /**
  * book_request_items rows as the "Active Booklist Requests" card renders
- * them.
+ * them, with the pricing quote's money folded in.
  *
- * unit_price stays null rather than becoming 0: a booklist that no
- * vendor has quoted has no prices, and showing ₦0 against a textbook
- * reads as free rather than as unpriced. The card checks for null.
+ * The prices do NOT come from book_request_items.unit_price. Vendors
+ * write to quote_items and never back onto the request rows, so that
+ * column is null on every row in practice — reading it and nothing else
+ * is why every line in this accordion said "Not priced" while a quote
+ * for the same list sat above it. lib/booklistPricing does the match.
+ *
+ * unit_price stays null rather than becoming 0 where there is no price:
+ * ₦0 against a textbook reads as free, not as unpriced. The card checks
+ * for null.
  */
-function mapRequestItems(rows) {
-  return rows.map((row) => ({
+function mapRequestItems(rows, quoteItems, pricingQuoteId) {
+  return priceBooklistItems(rows, quoteItems, pricingQuoteId).map((row) => ({
     id: row.id,
     title: row.title,
     // Absent entirely on projects that have not run
     // bookshops_booklist_author.sql — hence ?? null, not a bare read.
     author: row.author ?? null,
-    unit_price: row.unit_price == null ? null : Number(row.unit_price),
-    quantity: Number(row.quantity) || 1,
+    /** Per copy. Drives the order total, which multiplies by quantity. */
+    unit_price: row.effectiveUnitPrice,
+    /** What the shop is actually offering, which may be fewer copies. */
+    quantity: row.effectiveQuantity,
+    /** Requested copies, kept so the row can flag a short quote. */
+    requested_quantity: Number(row.quantity) || 1,
+    /** unit_price × quantity, or null when unpriced or out of stock. */
+    line_total: row.lineTotal,
+    /** False when the pricing vendor marked the line out of stock. */
+    is_available: row.isAvailable,
+    /** 'quote' | 'request' | 'none' — where the figure came from. */
+    price_source: row.priceSource,
     // TODO(db): no inventory model — in_stock is never real.
     in_stock: true,
     checked: true,
   }));
 }
 
-/** TODO(db): vendors has no rating column. See lib/mockData.js. */
-function ratingFor(vendorId) {
-  return MOCK_VENDOR_RATINGS[vendorId] ?? MOCK_VENDOR_RATING_DEFAULT;
+/**
+ * A shop's real reputation, or the absence of one.
+ *
+ * vendors.rating and vendors.review_count exist now, and both shops on
+ * this project have rating NULL — nobody has reviewed them yet. That is
+ * the honest answer and the card renders it as "No ratings yet". It used
+ * to be answered from a fixture that painted 4.8 stars and "Fast &
+ * Reliable" onto every vendor, which is invented social proof about a
+ * real business: a parent choosing a shop on the strength of it is being
+ * misled about who they are handing money to.
+ */
+function ratingFor(vendor) {
+  const rating = vendor?.rating == null ? null : Number(vendor.rating);
+  return {
+    rating: Number.isFinite(rating) ? rating : null,
+    review_count: Number(vendor?.review_count) || 0,
+  };
 }
 
 export function useDashboardData() {
@@ -126,20 +164,60 @@ export function useDashboardData() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
   const [diagnostics, setDiagnostics] = useState([]);
+  /**
+   * Has a load actually finished?
+   *
+   * Everything derived below reads as "this account has nothing" while
+   * `data` is still EMPTY, which on a reload is the whole first frame.
+   * That is what painted an order total over the summary bar before the
+   * real numbers arrived. Nothing may be concluded from empty state
+   * until a read has been and gone.
+   */
+  const [hasLoaded, setHasLoaded] = useState(false);
 
-  const load = useCallback(async ({ isRefresh = false } = {}) => {
-    isRefresh ? setRefreshing(true) : setLoading(true);
+  /**
+   * Which load is the current one. Loads overlap — a pull-to-refresh on
+   * top of a post-create revalidate, an auth event on top of both — and
+   * without this an older, slower run could finish last, clobber newer
+   * data and flip the spinners for a request nobody is waiting on.
+   */
+  const runId = useRef(0);
+  /** Set on unmount so a load in flight stops touching state. */
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+
+  /**
+   * mode: 'initial' | 'refresh' | 'background'
+   *
+   * 'background' is the one that matters here: after a booklist is
+   * created the cards already on screen have nothing wrong with them, so
+   * the re-read swaps the rows underneath rather than putting every card
+   * back to a skeleton.
+   */
+  const load = useCallback(async ({ mode = 'initial' } = {}) => {
+    const run = ++runId.current;
+    const current = () => alive.current && runId.current === run;
+
+    if (mode === 'refresh') setRefreshing(true);
+    else if (mode === 'initial') setLoading(true);
     setError(null);
     const notes = [];
 
     try {
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
+      // getSession(), not getUser(): getUser() is a network round trip on
+      // every load with no timeout, and right after an upload — busy
+      // connection, token refresh possibly in flight — it is exactly the
+      // call that hangs. A hang here means the finally below never runs
+      // and the dashboard sits on a skeleton for good.
+      const uid = await getSessionUserId();
+      if (!current()) return;
 
-      if (userError) throw userError;
-      if (!user) {
+      if (!uid) {
         notes.push({
           level: 'info',
           message: 'Not signed in — showing demo data.',
@@ -148,6 +226,7 @@ export function useDashboardData() {
         setDiagnostics(notes);
         return;
       }
+      const user = { id: uid };
 
       // --- profiles -------------------------------------------------
       // maybeSingle(), not single(): single() throws PGRST116 on zero
@@ -235,6 +314,23 @@ export function useDashboardData() {
         });
       }
 
+      // Ordered lists are no longer fetched above, so without this a
+      // buyer whose every booklist has become an order would look like a
+      // brand new account and get DEMO DATA laid over their real
+      // purchases. Same reason the draft count exists.
+      const { count: orderedCount, error: orderedError } = await supabase
+        .from('book_requests')
+        .select('id', { count: 'exact', head: true })
+        .eq('buyer_id', user.id)
+        .in('status', ORDERED_REQUEST_STATUSES);
+
+      if (orderedError) {
+        notes.push({
+          level: 'info',
+          message: `Could not count your orders: ${orderedError.message}`,
+        });
+      }
+
       // --- book_request_items ---------------------------------------
       // The line items the buyer saved, read in one query for every
       // request on screen rather than one query per accordion — a nested
@@ -288,17 +384,44 @@ export function useDashboardData() {
       // no SELECT policy, so we tolerate that below.
       const requestIds = (requests ?? []).map((r) => r.id);
       let quotes = [];
+      let quoteItems = [];
       if (requestIds.length) {
         const { data: q, error: quotesError } = await supabase
           .from('quotes')
           .select(
-            'id, request_id, vendor_id, total_price, item_breakdown, status, created_at, vendors ( id, store_name, city, is_active )'
+            'id, request_id, vendor_id, total_price, item_breakdown, status, created_at, vendors ( id, store_name, city, is_active, rating, review_count )'
           )
           .in('request_id', requestIds)
           .order('created_at', { ascending: false });
 
         if (quotesError) throw quotesError;
         quotes = q ?? [];
+
+        // --- quote_items ------------------------------------------
+        // Where the line prices actually live. Keyed by quote id, so it
+        // has to follow the quotes rather than run beside them.
+        // quote_items_select_buyer_sent scopes it server-side to
+        // non-draft quotes on this buyer's own requests, so a vendor's
+        // unsent draft prices never reach here.
+        const quoteIds = quotes.map((q2) => q2.id);
+        if (quoteIds.length) {
+          const { data: qi, error: quoteItemsError } = await supabase
+            .from('quote_items')
+            .select('id, quote_id, request_item_id, title, quantity, unit_price, is_available, position')
+            .in('quote_id', quoteIds)
+            .order('position', { ascending: true });
+
+          // Degrade to unpriced lines rather than killing the page: the
+          // accordion still lists the titles, it just cannot cost them.
+          if (quoteItemsError) {
+            notes.push({
+              level: 'error',
+              message: `Could not read quoted line prices: ${quoteItemsError.message}`,
+            });
+          } else {
+            quoteItems = qi ?? [];
+          }
+        }
 
         if (quotes.length && quotes.every((q2) => q2.vendors == null)) {
           notes.push({
@@ -336,12 +459,15 @@ export function useDashboardData() {
         email: user.email ?? null,
         requests: requests ?? [],
         draftCount: draftError ? 0 : (draftCount ?? 0),
+        orderedCount: orderedError ? 0 : (orderedCount ?? 0),
         items: bookItems,
         quotes,
+        quoteItems,
         orders: orders ?? [],
         vendors: vendors ?? [],
       });
     } catch (e) {
+      if (!current()) return;
       if (e?.code === 'PGRST205') {
         // "Could not find the table ... in the schema cache"
         e = new Error(
@@ -351,20 +477,29 @@ export function useDashboardData() {
         );
       }
       setError(e);
-      setData(EMPTY);
+      // A background revalidate that fails must not empty the dashboard
+      // the buyer is already reading. Keep the rows, show the error.
+      if (mode !== 'background') setData(EMPTY);
     } finally {
-      setDiagnostics(notes);
-      setLoading(false);
-      setRefreshing(false);
+      // Unconditional, and guarded so only the newest run may clear the
+      // flags: an older run finishing late must not switch a spinner off
+      // under a newer one, nor leave one on after this run is done.
+      if (current()) {
+        setDiagnostics(notes);
+        setLoading(false);
+        setRefreshing(false);
+        setHasLoaded(true);
+      }
     }
   }, []);
 
   useEffect(() => {
-    load();
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(() => load());
-    return () => subscription.unsubscribe();
+    load({ mode: 'initial' });
+    // Deferred and filtered. The callback runs inside supabase-js's own
+    // notification pass, and TOKEN_REFRESHED fires on a timer and during
+    // long uploads — reloading on it is how an upload could knock every
+    // card on this dashboard back to a skeleton.
+    return subscribeToAuthReloads(() => load({ mode: 'background' }));
   }, [load]);
 
   /**
@@ -373,20 +508,47 @@ export function useDashboardData() {
    * substitution sets `demo: true` so the UI can badge it.
    */
   const view = useMemo(() => {
-    const { requests, draftCount, items, quotes, vendors, orders, profile, email: authEmail } =
-      data;
+    const {
+      requests,
+      draftCount,
+      orderedCount,
+      items,
+      quotes,
+      quoteItems,
+      vendors,
+      orders,
+      profile,
+      email: authEmail,
+    } = data;
 
-    // `requests` now holds published lists only, so a buyer whose whole
-    // account is drafts would look empty and get demo data on top of
-    // their own real work. The draft count is what keeps that honest.
-    const isEmpty = requests.length === 0 && draftCount === 0;
+    // True only once a read has finished AND found nothing. Before the
+    // first load this is false, so no card concludes anything from a
+    // state that just means "not fetched yet".
+    const isEmpty =
+      hasLoaded && requests.length === 0 && draftCount === 0 && orderedCount === 0;
 
-    // Active booklist requests, each with its best available line items.
-    const activeRequests = isEmpty
-      ? MOCK_BOOKLIST_REQUESTS
-      : requests.map((r) => {
+    /**
+     * Active booklist requests, each with its best available line items.
+     *
+     * No fixture branch. This used to fall back to MOCK_BOOKLIST_REQUESTS
+     * — an invented booklist from "Laterna Books (Ikeja)" with priced
+     * lines — whenever the account looked empty, which included every
+     * first frame before the query returned. The summary bar sums those
+     * lines, so a reload flashed a made-up naira total over the real one.
+     * An empty account has an empty state; it does not have a pretend
+     * booklist.
+     */
+    const activeRequests = requests.map((r) => {
           const quotesForRequest = quotes.filter((q) => q.request_id === r.id);
-          const saved = mapRequestItems(items.filter((i) => i.request_id === r.id));
+          // The accepted quote, else the cheapest one sent. The same
+          // choice the booklists page makes, so the two screens cannot
+          // show a line at two different prices.
+          const pricingQuote = pickPricingQuote(quotesForRequest);
+          const saved = mapRequestItems(
+            items.filter((i) => i.request_id === r.id),
+            quoteItems,
+            pricingQuote?.id ?? null
+          );
           const fromBreakdown = parseItemBreakdown(quotesForRequest[0]?.item_breakdown);
 
           // The buyer's own saved lines first; a vendor's quote
@@ -405,24 +567,44 @@ export function useDashboardData() {
             /** 'saved' | 'quote' | 'none' — what the card is showing. */
             itemsSource: saved.length ? 'saved' : fromBreakdown ? 'quote' : 'none',
             quoteCount: quotesForRequest.length,
+            /**
+             * True once a vendor has actually sent something. The row
+             * only says "Awaiting quote" while this is false — past it,
+             * a line with no money on it has been answered, not ignored.
+             */
+            hasQuote: pricingQuote != null,
           };
-        });
+    });
 
-    const pendingQuotes = quotes.length
-      ? quotes
-          .filter((q) => q.status === 'sent')
-          .map((q) => ({
-            id: q.id,
-            vendor_name: q.vendors?.store_name ?? 'Vendor (name hidden by RLS)',
-            total_price: Number(q.total_price) || 0,
-            status: q.status,
-            ...ratingFor(q.vendor_id), // TODO(db): vendors.rating
-          }))
-      : MOCK_QUOTES.map((q) => ({ ...q, ...MOCK_VENDOR_RATING_DEFAULT }));
+    /**
+     * Real quotes only. No fixture fallback, in any environment.
+     *
+     * This used to substitute four invented shops whenever the query
+     * came back empty — so a buyer with no quotes was shown "School
+     * Books & More" and "Laterna Books (Ikeja)" offering prices for
+     * books nobody had priced. Accepting one leads nowhere, and the
+     * "Demo data" pill was easy to miss above four convincing rows.
+     * Zero quotes is a real answer, and the card has an empty state
+     * that says so.
+     *
+     * Note the filter now runs unconditionally: the old `quotes.length ?`
+     * guard meant a buyer holding only draft or accepted quotes fell
+     * through to the fixtures too.
+     */
+    const pendingQuotes = quotes
+      .filter((q) => q.status === 'sent')
+      .map((q) => ({
+        id: q.id,
+        vendor_name: q.vendors?.store_name ?? 'Vendor (name hidden by RLS)',
+        total_price: Number(q.total_price) || 0,
+        status: q.status,
+        ...ratingFor(q.vendors),
+      }));
 
-    const featuredShop = vendors.length
-      ? { ...vendors[0], ...ratingFor(vendors[0].id) }
-      : MOCK_FEATURED_SHOP;
+    // Null when no vendor is visible, and the card renders its own "No
+    // shops yet". It used to name a shop that does not exist, which is a
+    // worse thing to show a buyer than a blank.
+    const featuredShop = vendors.length ? { ...vendors[0], ...ratingFor(vendors[0]) } : null;
 
     // Order total = the checked line items of the first active request.
     // TODO(db): `orders` stores no amount, so a placed order's true value
@@ -430,7 +612,18 @@ export function useDashboardData() {
     const activeItems = activeRequests[0]?.items ?? [];
     const orderTotal = activeItems
       .filter((i) => i.checked !== false)
-      .reduce((sum, i) => sum + (Number(i.unit_price) || 0) * (Number(i.quantity) || 1), 0);
+      // line_total already excludes unpriced and out-of-stock lines, and
+      // is the same figure printed on the row — so the summary and the
+      // rows above it cannot disagree. The fallback covers demo rows,
+      // which carry a unit price and no line total.
+      .reduce(
+        (sum, i) =>
+          sum +
+          (i.line_total != null
+            ? Number(i.line_total)
+            : (Number(i.unit_price) || 0) * (Number(i.quantity) || 1)),
+        0
+      );
 
     return {
       profile,
@@ -442,13 +635,19 @@ export function useDashboardData() {
       activeRequests,
       /** Drafts, which this card deliberately does not show. */
       draftCount,
+      /** Ordered lists, which live on My Orders rather than this card. */
+      orderedCount,
       pendingQuotes,
       featuredShop,
       vendors,
       orders,
       orderTotal,
-      /** True when any panel is showing invented rows rather than real ones. */
-      usingDemoData: isEmpty,
+      /**
+       * Nothing on this dashboard is invented any more, so this is
+       * always false. Kept so callers do not break; remove it and the
+       * banner it drove once nothing reads it.
+       */
+      usingDemoData: false,
       /**
        * True when the signed-in account is fine but the marketplace simply
        * has no data yet — the normal state of a freshly migrated project.
@@ -459,7 +658,7 @@ export function useDashboardData() {
       /** True when the only thing this buyer has is unpublished drafts. */
       hasOnlyDrafts: requests.length === 0 && draftCount > 0,
     };
-  }, [data]);
+  }, [data, hasLoaded]);
 
   return {
     ...view,
@@ -468,6 +667,11 @@ export function useDashboardData() {
     refreshing,
     error,
     diagnostics,
-    refresh: () => load({ isRefresh: true }),
+    /** Pull-to-refresh: platform spinner, cards stay put. */
+    refresh: () => load({ mode: 'refresh' }),
+    /** Re-read after a write. No card returns to a skeleton. */
+    revalidate: () => load({ mode: 'background' }),
+    /** Full reload with skeletons. For a retry after a hard failure. */
+    reload: () => load({ mode: 'initial' }),
   };
 }

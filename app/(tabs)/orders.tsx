@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 
 import { OrderCard } from '../../components/orders/OrderCard';
 
@@ -99,6 +99,15 @@ export default function OrdersScreen() {
 
   const { sections, loading, refreshing, error, refresh } = useOrders();
 
+  // Checkout redirects here with ?placed=<order id> after a successful
+  // charge. The confirmation belongs on this screen rather than on
+  // checkout: the buyer's next question is "where is my order", and the
+  // answer is the list they are now looking at.
+  const { placed } = useLocalSearchParams<{ placed?: string | string[] }>();
+  const placedId = Array.isArray(placed) ? placed[0] : placed ?? null;
+  const [confirmationShown, setConfirmationShown] = useState(true);
+  const justPlaced = placedId && confirmationShown ? placedId : null;
+
 
   function handleDispute(order: OrderView) {
     openSupportChat(
@@ -143,6 +152,27 @@ export default function OrdersScreen() {
                 : `${total} order${total === 1 ? '' : 's'} in total`}
             </Text>
           </View>
+
+          {!!justPlaced && (
+            <View style={styles.placed}>
+              <Ionicons name="shield-checkmark" size={18} color={colors.success} />
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={styles.placedTitle}>Payment successful</Text>
+                <Text style={styles.placedBody}>
+                  Your money is held in LOCI Escrow and the shop has been notified to dispatch. It
+                  is released only after you confirm the books arrived.
+                </Text>
+              </View>
+              <Pressable
+                onPress={() => setConfirmationShown(false)}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Dismiss"
+              >
+                <Ionicons name="close" size={18} color={colors.textMuted} />
+              </Pressable>
+            </View>
+          )}
 
           {error && (
             <View style={styles.errorBox}>
@@ -230,6 +260,18 @@ const styles = StyleSheet.create({
   emptyText: { fontSize: font.md, color: colors.textMuted, textAlign: 'center', lineHeight: 20 },
 
   loading: { paddingVertical: spacing.xxl, alignItems: 'center' },
+
+  placed: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    backgroundColor: '#EAF6EF',
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  placedTitle: { fontSize: font.md, fontWeight: '700', color: colors.text },
+  placedBody: { fontSize: font.sm, color: colors.textMuted, lineHeight: 18, marginTop: 1 },
 
   errorBox: {
     flexDirection: 'row',

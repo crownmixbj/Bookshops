@@ -1,11 +1,30 @@
-import { VendorPlaceholder } from '../../components/layout/VendorPlaceholder';
+import { useEffect } from 'react';
+import { View, ActivityIndicator, StyleSheet } from 'react-native';
+import { router } from 'expo-router';
+import { colors } from '../../theme';
 
-export default function VendorBooklistsScreen() {
+/**
+ * My Booklists became Requests & Quotes — the sent quotes are a tab there now, beside the incoming queue.
+ *
+ * Kept as a redirect rather than deleted: this path is in browser
+ * histories and bookmarks, and removing the file would land anyone
+ * holding one on expo-router's "Unmatched Route" page.
+ *
+ * `replace`, not `push`, so Back returns where the vendor actually came
+ * from instead of bouncing through here again.
+ */
+export default function VendorBooklistsRedirect() {
+  useEffect(() => {
+    router.replace('/vendor/quotes');
+  }, []);
+
   return (
-    <VendorPlaceholder
-      icon="bookmark-outline"
-      title="My Booklists"
-      summary="Booklists you have quoted on or been sent directly, with the state of each quote."
-    />
+    <View style={styles.wrap}>
+      <ActivityIndicator color={colors.navy} />
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  wrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+});

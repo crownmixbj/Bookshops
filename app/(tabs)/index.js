@@ -12,9 +12,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 
 import { ActiveBooklists } from '../../components/dashboard/ActiveBooklists';
-import { CreateBooklistSheet } from '../../components/dashboard/CreateBooklistSheet';
-import { CreateBooklistModal } from '../../components/booklists/CreateBooklistModal';
-import { pickBooklistImage, DRAFT_STATUS } from '../../lib/booklistUpload';
+import { CreateBooklistModal } from '../../components/CreateBooklistModal';
+import { BooklistReviewModal } from '../../components/booklists/BooklistReviewModal';
 import { CreateBooklist } from '../../components/dashboard/CreateBooklist';
 import { PendingQuotes } from '../../components/dashboard/PendingQuotes';
 import { FeaturedShops } from '../../components/dashboard/FeaturedShops';
@@ -22,6 +21,7 @@ import { OrderSummary } from '../../components/dashboard/OrderSummary';
 
 import { useLayout } from '../../hooks/useLayout';
 import { useDashboardData } from '../../hooks/useDashboardData';
+import { useCreateBooklist } from '../../hooks/useCreateBooklist';
 import { supabase } from '../../utils/supabase';
 import { colors, spacing, radius, font } from '../../theme';
 import { Footer } from '../../components/layout/Footer';
@@ -36,8 +36,6 @@ import { Footer } from '../../components/layout/Footer';
  */
 export default function DashboardScreen() {
   const { isDesktop, isMobile, contentPadding } = useLayout();
-  const [newTitle, setNewTitle] = useState('');
-  const [submitting, setSubmitting] = useState(false);
 
   /**
    * Per-item checkbox state, keyed by item id. Absent = checked, so a
@@ -45,11 +43,11 @@ export default function DashboardScreen() {
    */
   const [selection, setSelection] = useState({});
 
-  /** The create flow: pick a source, then name it and submit. */
-  const [sheetOpen, setSheetOpen] = useState(false);
-  const [pickedImage, setPickedImage] = useState(null);
-  const [detailsOpen, setDetailsOpen] = useState(false);
-  const [pickError, setPickError] = useState(null);
+  /**
+   * The create flow. Shared with My Booklists so both screens offer the
+   * same three choices and land in the same place.
+   */
+  const create = useCreateBooklist();
   const [created, setCreated] = useState(null);
   const [userId, setUserId] = useState(null);
 
@@ -72,15 +70,15 @@ export default function DashboardScreen() {
     displayName,
     activeRequests,
     draftCount,
+    orderedCount,
     pendingQuotes,
     featuredShop,
     loading,
     refreshing,
     refresh,
+    revalidate,
     error,
     diagnostics,
-    usingDemoData,
-    isEmptyProject,
   } = useDashboardData();
 
   // Order total recomputed from the visible checkboxes, so unticking a
@@ -97,69 +95,11 @@ export default function DashboardScreen() {
     };
   }, [activeRequests, selection]);
 
-  const handleCreate = async () => {
-    setSubmitting(true);
-    try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) return router.push('/auth/login');
-
-      // NOTE: book_requests has no `title` column — the mockup's title
-      // field maps onto school_name until the schema grows a real one.
-      const { error: insertError } = await supabase.from('book_requests').insert({
-        buyer_id: user.id,
-        school_name: newTitle.trim(),
-        class_level: '',
-        // A draft. This box creates a list with no items in it, and a
-        // published request with nothing to price reaches every vendor's
-        // queue as a row they can only decline.
-        status: DRAFT_STATUS,
-      });
-      if (insertError) throw insertError;
-
-      setNewTitle('');
-      refresh();
-    } catch (e) {
-      console.warn('[dashboard] could not create booklist:', e.message);
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  // Both "Create New Booklist" buttons — the navy tile here and the
-  // orange one under My Pending Quotes — open the same sheet. The
-  // inline title box below still creates in place for the quick path.
-  const handleCreateNew = () => {
-    setPickError(null);
-    setSheetOpen(true);
-  };
-
-  /**
-   * Turn a choice from the sheet into the next screen.
-   *
-   * Typing goes to its own route so it is linkable. Camera and library
-   * both end at the same details modal — the only difference is where
-   * the image came from — and the picker is opened BEFORE the modal so
-   * a cancelled pick leaves nothing on screen to dismiss.
-   */
-  async function handleCreateSource(source) {
-    setSheetOpen(false);
-    if (source === 'manual') {
-      router.push('/booklists/new-manual');
-      return;
-    }
-    try {
-      const picked = await pickBooklistImage(source);
-      // Null means cancelled, or the permission was declined. Neither is
-      // an error and neither should open anything.
-      if (!picked) return;
-      setPickedImage(picked);
-      setDetailsOpen(true);
-    } catch (e) {
-      setPickError(e?.message ?? String(e));
-    }
-  }
+  // The navy hero tile is the only way to start a booklist from this
+  // screen, and it opens the same CreateBooklistModal My Booklists
+  // opens. Nothing is written to book_requests until the buyer has
+  // actually got a list — no more named-but-empty drafts.
+  const handleCreateNew = create.open;
 
   // `orders` does have an insert policy, an amount column and the
   // delivery fields — what is missing is the payment provider and a
@@ -183,11 +123,13 @@ export default function DashboardScreen() {
         // only so the empty state can point at where they actually live.
         draftCount={draftCount}
         onOpenDrafts={() => router.push('/booklists')}
+        // An ordered list is an order now, and this is where it went.
+        orderedCount={orderedCount}
+        onOpenOrders={() => router.push('/orders')}
       />
       <PendingQuotes
         quotes={pendingQuotes}
         loading={loading}
-        onCreatePress={handleCreateNew}
         onSelectQuote={(q) => router.push(`/quotes/${q.id}`)}
       />
     </View>
@@ -195,13 +137,7 @@ export default function DashboardScreen() {
 
   const sideColumn = (
     <View style={styles.colGap}>
-      <CreateBooklist
-        title={newTitle}
-        onTitleChange={setNewTitle}
-        onCapture={handleCreateNew}
-        onSubmit={handleCreate}
-        submitting={submitting}
-      />
+      <CreateBooklist onCapture={handleCreateNew} />
       <FeaturedShops
         shop={featuredShop}
         // No id means there is no shop to open — the card is showing
@@ -247,24 +183,12 @@ export default function DashboardScreen() {
             />
           )}
 
-          {!!pickError && (
+          {!!create.error && (
             <Banner
               tone="error"
               icon="alert-circle"
-              text={`Could not open your photos: ${pickError}`}
-              action={{ label: 'Dismiss', onPress: () => setPickError(null) }}
-            />
-          )}
-
-          {!error && usingDemoData && (
-            <Banner
-              tone="info"
-              icon="information-circle"
-              text={
-                isEmptyProject
-                  ? 'Your account is set up. Nothing has been added to the marketplace yet, so the cards below show example data.'
-                  : 'Some panels are showing example data because there are no rows for them yet.'
-              }
+              text={`Could not open your photos: ${create.error}`}
+              action={{ label: 'Dismiss', onPress: create.clearError }}
             />
           )}
 
@@ -294,42 +218,49 @@ export default function DashboardScreen() {
         </ScrollView>
 
         {isDesktop && (
-          <OrderSummary total={total} itemCount={itemCount} onCheckout={handleCheckout} />
+          <OrderSummary total={total} itemCount={itemCount} onCheckout={handleCheckout} loading={loading} />
         )}
       </View>
 
       {!isDesktop && (
-        <OrderSummary total={total} itemCount={itemCount} onCheckout={handleCheckout} />
+        <OrderSummary total={total} itemCount={itemCount} onCheckout={handleCheckout} loading={loading} />
       )}
 
-      <CreateBooklistSheet
-        visible={sheetOpen}
-        onSelect={handleCreateSource}
-        onClose={() => setSheetOpen(false)}
+      <CreateBooklistModal
+        visible={create.choosing}
+        onClose={create.close}
+        onPick={create.onPick}
+        onDismissed={create.onDismissed}
+        title={create.title}
+        onTitleChange={create.setTitle}
       />
 
-      <CreateBooklistModal
-        visible={detailsOpen}
+      {/* Camera and gallery both land here: the photo is uploaded and
+          read, and nothing is written to book_requests until the buyer
+          confirms the lines. OCR gets titles wrong, and a wrong title
+          is a wrong quote. */}
+      <BooklistReviewModal
+        visible={create.image !== null}
         userId={userId}
-        initialImage={pickedImage}
-        onClose={() => {
-          setDetailsOpen(false);
-          setPickedImage(null);
-        }}
-        onCreated={async (note) => {
-          setCreated(
-            note
-              ? `Booklist sent. ${note}`
-              : 'Booklist sent. Shops near you can now quote on it.'
-          );
-          // Pull the new row into Active Booklist Requests rather than
-          // waiting for the next pull-to-refresh.
-          await refresh();
+        image={create.image}
+        initialSchool={create.title}
+        onClose={create.clearImage}
+        onSubmitted={async (message) => {
+          setCreated(message);
+          // Background re-read, not a refresh: the cards already on
+          // screen have nothing wrong with them, and sending them back
+          // to a skeleton because a NEW booklist was created is the
+          // whole complaint. The new row appears in place.
+          await revalidate();
         }}
       />
+
     </>
   );
 }
+
+/** Tailwind's max-w-7xl. Past this the dashboard centres instead of stretching. */
+const CONTENT_MAX_WIDTH = 1280;
 
 const BANNER_TONES = {
   error: { bg: '#FCEAE8', border: '#F0C4BF', fg: colors.danger },
@@ -357,16 +288,29 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.page },
   body: { flex: 1, flexDirection: 'row' },
   scroll: { flex: 1 },
-  scrollContent: { paddingBottom: spacing.xxl },
+  /**
+   * Content stops widening past CONTENT_MAX_WIDTH and centres itself.
+   *
+   * Below that this is inert; above it — an ultra-wide monitor — the
+   * dashboard used to keep stretching, so two columns of cards sat on a
+   * 2000px band with the text lines too long to scan comfortably. This
+   * is the equivalent of Tailwind's `max-w-7xl mx-auto w-full`.
+   */
+  scrollContent: {
+    paddingBottom: spacing.xxl,
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
+  },
 
   heading: { marginBottom: spacing.lg },
   h1: { fontSize: 22, fontWeight: '800', color: colors.text },
   h2: { fontSize: font.md, color: colors.textMuted, marginTop: 2 },
 
-  columns: { flexDirection: 'row', gap: spacing.lg, alignItems: 'flex-start' },
+  columns: { flexDirection: 'row', gap: spacing.lg, alignItems: 'flex-start', width: '100%' },
   mainCol: { flex: 1.55, minWidth: 300 },
   sideCol: { flex: 1, minWidth: 260 },
-  colGap: { gap: spacing.lg },
+  colGap: { gap: spacing.lg, width: '100%' },
 
   banner: {
     flexDirection: 'row',

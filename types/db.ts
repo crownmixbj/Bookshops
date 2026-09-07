@@ -24,7 +24,24 @@ export type RequestStatus = 'draft' | 'pending_quote' | 'quoted' | 'ordered' | '
 
 export type QuoteStatus = 'draft' | 'sent' | 'accepted' | 'rejected' | 'withdrawn' | 'expired';
 
-export type PaymentStatus = 'pending' | 'paid' | 'failed' | 'refunded';
+/**
+ * 'escrow_held' is money taken and held by LOCI; 'escrow_released' is
+ * money that has since gone to the vendor. Neither is 'paid' — 'paid'
+ * is kept for legacy rows and direct settlement, and treating escrowed
+ * money as the vendor's is the mistake this distinction exists to stop.
+ *
+ * Requires bookshops_escrow_checkout.sql.
+ */
+export type PaymentStatus =
+  | 'pending'
+  | 'escrow_held'
+  | 'escrow_released'
+  | 'paid'
+  | 'failed'
+  | 'refunded';
+
+/** Payment states where the buyer's money has actually been taken. */
+export const SETTLED_PAYMENT_STATUSES: PaymentStatus[] = ['escrow_held', 'escrow_released', 'paid'];
 
 export type FulfillmentStatus =
   | 'processing'
@@ -204,6 +221,50 @@ export interface VendorQueueRow {
   customer_phone: string | null;
 }
 
+/**
+ * One row of the vendor's "My Booklists", as returned by the
+ * `vendor_quote_list()` RPC.
+ *
+ * Every row is a quote this vendor wrote, so the customer's name is
+ * always present — unlike VendorQueueRow, where it is withheld until the
+ * vendor has engaged with the request.
+ */
+export interface VendorQuoteRow {
+  quote_id: string;
+  request_id: string;
+  reference: string;
+  quote_status: QuoteStatus;
+  school_name: string;
+  class_level: string;
+  customer_name: string | null;
+  customer_phone: string | null;
+  total_price: number;
+  /** Lines this vendor priced and marked available. */
+  quoted_item_count: number;
+  /** Lines the buyer asked for. */
+  requested_item_count: number;
+  /** Lines this vendor marked out of stock. */
+  unavailable_count: number;
+  order_id: string | null;
+  order_fulfillment_status: FulfillmentStatus | null;
+  is_targeted: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * What the vendor's quote list shows, which is not quotes.status.
+ *
+ * 'ordered' is not a quote status at all — it comes from an orders row
+ * existing — and 'declined' folds three database values that mean the
+ * same thing to a shop: the buyer said no, the vendor pulled out, or it
+ * timed out. Either way the work is finished and nothing can be done.
+ */
+export type VendorQuoteState = 'draft' | 'sent' | 'accepted' | 'ordered' | 'declined';
+
+/** The filter tabs on the vendor's My Booklists page. */
+export type VendorQuoteTab = 'all' | 'pending' | 'accepted' | 'declined' | 'draft';
+
 /** How a queue row reads to the vendor. */
 export type QueueBadge = 'new' | 'processing' | 'pending' | 'sent' | 'accepted';
 
@@ -294,6 +355,14 @@ export interface ShopView extends Vendor {
   isVerified: boolean;
 }
 
+/** The shop a booklist was addressed to, embedded on the request. */
+export interface TargetVendor {
+  id: string;
+  store_name: string;
+  city: string | null;
+  is_active: boolean;
+}
+
 export interface BookRequest {
   id: string;
   buyer_id: string;
@@ -306,6 +375,15 @@ export interface BookRequest {
    * makes the other two combinations impossible to store.
    */
   target_vendor_id: string | null;
+  /**
+   * The shop behind target_vendor_id, embedded by the query.
+   *
+   * Null both when the list is open to the market and when the targeted
+   * shop is no longer visible to this buyer — vendors_select_active
+   * hides a deactivated one — so the id above is what proves a list was
+   * addressed, and this is only how it gets a name.
+   */
+  target_vendor?: TargetVendor | null;
   /**
    * Optional on the type, not just nullable: a build that has not run
    * bookshops_dispatch_routing.sql has no such column, so a select
@@ -369,11 +447,22 @@ export interface Order {
   amount: number | null;
   currency: string;
 
+  /** Our reference, generated before the charge. The idempotency key. */
+  payment_reference: string | null;
+  payment_provider: 'paystack' | 'test' | null;
+  /** Paystack's own transaction id, which is what their support asks for. */
+  gateway_reference: string | null;
+  paid_at: string | null;
+  escrow_released_at: string | null;
+
   delivery_name: string | null;
   delivery_phone: string | null;
   delivery_address: string | null;
   delivery_city: string | null;
+  delivery_state: string | null;
   delivery_notes: string | null;
+  /** Snapshot of the rate charged. `amount` already includes it. */
+  delivery_fee: number;
 
   /** Stamped by the stamp_order_fulfillment trigger, not the client. */
   placed_at: string;
@@ -429,17 +518,41 @@ export interface OrderView extends Order {
 /** Which section of the page a request belongs in. */
 export type BooklistBucket = 'active' | 'draft' | 'archived';
 
+/**
+ * A requested line with the pricing quote's numbers folded in.
+ *
+ * Prices live on `quote_items`, not on `book_request_items` — the same
+ * line costs different money at different shops — so the figures a
+ * buyer sees are resolved per booklist against whichever quote the card
+ * is headlining. See lib/booklistPricing.ts.
+ */
+export interface PricedLineFields {
+  /** Per-copy price from the quote, else the request row's own. Null when unpriced. */
+  effectiveUnitPrice: number | null;
+  /** Copies the price applies to. A shop may quote fewer than were asked for. */
+  effectiveQuantity: number;
+  /** effectiveUnitPrice × effectiveQuantity. Null when unpriced or out of stock. */
+  lineTotal: number | null;
+  /** False when the pricing vendor marked this line out of stock. */
+  isAvailable: boolean;
+  /** 'quote' — read off quote_items. 'request' — the buyer's own estimate. 'none' — unpriced. */
+  priceSource: 'quote' | 'request' | 'none';
+}
+
+/** A full request line with the pricing quote's numbers folded in. */
+export interface PricedBooklistItem extends BookRequestItem, PricedLineFields {}
+
 export interface BooklistItemGroup {
   category: ItemCategory;
-  items: BookRequestItem[];
-  /** Sum of quantity × unit_price for priced lines only. */
+  items: PricedBooklistItem[];
+  /** Sum of the priced, in-stock lines in this group. */
   subtotal: number;
-  /** Lines in this group with no price yet. */
+  /** In-stock lines in this group with no price yet. */
   unpricedCount: number;
 }
 
 export interface Booklist extends BookRequest {
-  items: BookRequestItem[];
+  items: PricedBooklistItem[];
   groups: BooklistItemGroup[];
   quotes: Quote[];
   order: Order | null;
@@ -460,6 +573,15 @@ export interface Booklist extends BookRequest {
    */
   estimatedTotal: number;
   totalSource: 'order' | 'quote' | 'items' | 'none';
-  /** True when at least one line has no unit_price yet. */
+  /** True when at least one in-stock line still has no price. */
   hasUnpricedItems: boolean;
+  /** Lines the pricing vendor marked out of stock. Excluded from the total. */
+  unavailableCount: number;
+  /**
+   * False when the headline figure and the sum of the lines beneath it
+   * disagree — a stale quotes.total_price, or lines the buyer cannot
+   * see. The card says so rather than showing two numbers that do not
+   * add up.
+   */
+  totalMatchesLines: boolean;
 }

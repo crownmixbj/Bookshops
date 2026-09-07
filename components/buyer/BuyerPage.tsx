@@ -31,7 +31,12 @@ export function BuyerPage({
   const { contentPadding, isMobile } = useLayout();
 
   return (
-    <ScrollView contentContainerStyle={[styles.scroll, { padding: contentPadding }]}>
+    <ScrollView
+      contentContainerStyle={[styles.scroll, { padding: contentPadding }]}
+      // Without this, the first tap on Add / Remove while the keyboard
+      // is open only dismisses the keyboard — the button never fires.
+      keyboardShouldPersistTaps="handled"
+    >
       <View style={styles.column}>
         <Pressable
           // canGoBack is false on a cold load of a deep link — a shared

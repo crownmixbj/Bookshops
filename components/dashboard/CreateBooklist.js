@@ -1,59 +1,37 @@
-import { View, Text, TextInput, Pressable, ActivityIndicator, StyleSheet } from 'react-native';
+import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, radius, font, shadow } from '../../theme';
 
 /**
- * The primary call to action: photograph a school booklist, name it, and
- * send it out for quotes. The navy tile is the camera/upload action; the
- * field below it names the request.
+ * The one way to start a booklist from the hub.
+ *
+ * This card used to carry a second path as well: a title box and a
+ * "Request Quotes" button that inserted a book_requests row on the spot.
+ * It was removed because of what it produced — a booklist with a name
+ * and no books. A parent typed "Chrisland JSS2 — First Term", pressed
+ * the orange button, and got a draft with nothing in it and no obvious
+ * next step; publishing one reaches every vendor as a row they can only
+ * decline. The chooser this tile opens asks how the list should be
+ * started before creating anything, so a request only exists once there
+ * is something in it.
  */
-export function CreateBooklist({ title, onTitleChange, onCapture, onSubmit, submitting, disabled }) {
-  const canSubmit = !submitting && !disabled && title.trim().length > 0;
-
+export function CreateBooklist({ onCapture, disabled = false }) {
   return (
     <View style={styles.wrap}>
       <Pressable
         onPress={onCapture}
-        disabled={submitting}
+        disabled={disabled}
         style={({ pressed }) => [styles.capture, pressed && styles.capturePressed]}
         accessibilityRole="button"
-        accessibilityLabel="Photograph or upload a booklist"
+        accessibilityLabel="Create a new booklist"
+        accessibilityHint="Photograph a printed list, pick one from your photos, or type it in"
       >
         <View style={styles.captureIcon}>
           <Ionicons name="camera" size={22} color={colors.navy} />
         </View>
         <Text style={styles.captureText}>Create New Booklist</Text>
-        <Text style={styles.captureHint}>Snap or upload the school list</Text>
+        <Text style={styles.captureHint}>Snap it, upload it, or type it in</Text>
       </Pressable>
-
-      <View style={styles.field}>
-        <TextInput
-          value={title}
-          onChangeText={onTitleChange}
-          placeholder="e.g. Chrisland JSS2 — First Term"
-          placeholderTextColor={colors.textFaint}
-          style={styles.input}
-          multiline
-          accessibilityLabel="Booklist title"
-        />
-        <Pressable
-          onPress={onSubmit}
-          disabled={!canSubmit}
-          style={({ pressed }) => [
-            styles.submit,
-            !canSubmit && styles.submitDisabled,
-            pressed && canSubmit && styles.submitPressed,
-          ]}
-          accessibilityRole="button"
-          accessibilityLabel="Request quotes for this booklist"
-        >
-          {submitting ? (
-            <ActivityIndicator color={colors.onNavy} size="small" />
-          ) : (
-            <Text style={styles.submitText}>Request Quotes</Text>
-          )}
-        </Pressable>
-      </View>
     </View>
   );
 }
@@ -80,32 +58,4 @@ const styles = StyleSheet.create({
   },
   captureText: { color: colors.onNavy, fontSize: font.lg, fontWeight: '700' },
   captureHint: { color: 'rgba(255,255,255,0.75)', fontSize: font.sm },
-
-  field: {
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
-    padding: spacing.md,
-    gap: spacing.md,
-    ...shadow.card,
-  },
-  input: {
-    minHeight: 66,
-    fontSize: font.md,
-    color: colors.text,
-    textAlignVertical: 'top',
-    outlineStyle: 'none',
-  },
-  submit: {
-    backgroundColor: colors.orange,
-    borderRadius: radius.md,
-    paddingVertical: 11,
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 40,
-  },
-  submitPressed: { backgroundColor: colors.orangeDark },
-  submitDisabled: { backgroundColor: colors.borderStrong },
-  submitText: { color: colors.onNavy, fontWeight: '700', fontSize: font.md },
 });

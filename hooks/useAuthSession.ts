@@ -19,11 +19,11 @@ import type { UserRole } from '../types/db';
  * against `vendors` server-side.
  */
 
-export type LandingRoute = '/vendor' | '/admin' | '/';
+export type LandingRoute = '/vendor' | '/admin/dashboard' | '/';
 
 export const LANDING: Record<UserRole, LandingRoute> = {
   vendor: '/vendor',
-  admin: '/admin',
+  admin: '/admin/dashboard',
   buyer: '/',
 };
 

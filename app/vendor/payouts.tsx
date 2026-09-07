@@ -6,7 +6,7 @@ import { router } from 'expo-router';
 import { Panel } from '../../components/vendor/VendorShell';
 import { Skeleton, StatCard, StatusBadge, ThresholdBar } from '../../components/vendor/PayoutParts';
 import { BankPicker } from '../../components/vendor/BankPicker';
-import { Footer } from '../../components/layout/Footer';
+import { WorkspaceFooter } from '../../components/layout/WorkspaceFooter';
 import { useShell } from '../../components/layout/ShellContext';
 import { useLayout } from '../../hooks/useLayout';
 import { useVendorPayouts, maskAccountNumber } from '../../hooks/useVendorPayouts';
@@ -109,7 +109,7 @@ export default function VendorPayoutsScreen() {
             <Text style={styles.setupBtnText}>Check again</Text>
           </Pressable>
         </View>
-        <Footer audience="vendor" />
+        <WorkspaceFooter />
       </ScrollView>
     );
   }
@@ -376,7 +376,7 @@ export default function VendorPayoutsScreen() {
         )}
       </Panel>
 
-      <Footer audience="vendor" />
+      <WorkspaceFooter />
     </ScrollView>
   );
 }

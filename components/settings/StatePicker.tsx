@@ -44,29 +44,38 @@ export function StatePicker({ label, value, onChange, placeholder = 'Choose a st
     <View style={styles.wrap}>
       <Text style={styles.label}>{label}</Text>
 
-      <Pressable
-        onPress={() => setOpen(true)}
-        style={({ pressed }) => [styles.control, pressed && styles.pressed]}
-        accessibilityRole="button"
-        accessibilityLabel={value ? `${label}: ${value}` : label}
-        accessibilityHint="Opens a list of states"
-      >
-        <Text style={[styles.value, !value && styles.valuePlaceholder]} numberOfLines={1}>
-          {value || placeholder}
-        </Text>
-        {value ? (
+      {/* A row containing two buttons, not a button containing a button.
+          react-native-web renders accessibilityRole="button" as a real
+          <button>, and HTML forbids nesting them — so "clear" has to be a
+          sibling of "open the list", not a child of it. Nesting them also
+          meant a tap on the clear icon bubbled up and opened the modal it
+          had just cleared. */}
+      <View style={styles.control}>
+        <Pressable
+          onPress={() => setOpen(true)}
+          style={({ pressed }) => [styles.controlMain, pressed && styles.pressed]}
+          accessibilityRole="button"
+          accessibilityLabel={value ? `${label}: ${value}` : label}
+          accessibilityHint="Opens a list of states"
+        >
+          <Text style={[styles.value, !value && styles.valuePlaceholder]} numberOfLines={1}>
+            {value || placeholder}
+          </Text>
+          {!value && <Ionicons name="chevron-down" size={16} color={colors.textMuted} />}
+        </Pressable>
+
+        {!!value && (
           <Pressable
             onPress={() => onChange('')}
             hitSlop={8}
+            style={({ pressed }) => [styles.clear, pressed && styles.pressed]}
             accessibilityRole="button"
             accessibilityLabel={`Clear ${label}`}
           >
             <Ionicons name="close-circle" size={17} color={colors.textFaint} />
           </Pressable>
-        ) : (
-          <Ionicons name="chevron-down" size={16} color={colors.textMuted} />
         )}
-      </Pressable>
+      </View>
 
       <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
         <Pressable style={styles.scrim} onPress={() => setOpen(false)} accessibilityLabel="Close" />
@@ -141,6 +150,10 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     minHeight: 44,
   },
+  // The opener fills the row so the whole field is still tappable; only
+  // the clear icon is carved out of it.
+  controlMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minWidth: 0 },
+  clear: { paddingLeft: spacing.xs },
   value: { flex: 1, fontSize: font.md, color: colors.text },
   valuePlaceholder: { color: colors.textFaint },
 
