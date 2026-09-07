@@ -75,6 +75,7 @@ export function ProfileMenu({ visible, onClose }) {
   const {
     loading,
     error,
+    signedOut,
     refresh,
     profile,
     vendor,
@@ -112,6 +113,17 @@ export function ProfileMenu({ visible, onClose }) {
     });
   }
 
+  /**
+   * Dismiss, then go. Same sequencing as the other two: pushing a route
+   * from under a live Modal strands it above the new screen on iOS.
+   */
+  function handleSignIn() {
+    onClose?.();
+    InteractionManager.runAfterInteractions(() => {
+      router.push('/auth/login');
+    });
+  }
+
   function handleEditProfile() {
     onClose?.();
     InteractionManager.runAfterInteractions(() => {
@@ -119,13 +131,40 @@ export function ProfileMenu({ visible, onClose }) {
     });
   }
 
+  /**
+   * Sign out, and mean it.
+   *
+   * Three things, in this order, because the failure mode of getting it
+   * wrong is a menu that says "signed out" while the tokens are still on
+   * the device:
+   *
+   *   1. supabase.auth.signOut() clears the stored session and fires
+   *      SIGNED_OUT, which useProfileDetails listens for and wipes on.
+   *   2. The card is closed regardless of the result. A network error
+   *      here means the server could not be told, but supabase-js has
+   *      already dropped the local session either way — so the person IS
+   *      signed out on this device, and holding the menu open over an
+   *      error would say otherwise.
+   *   3. Where they land is not decided here. app/_layout.js watches the
+   *      session: a protected route bounces to /auth/login, and a public
+   *      one — the dashboard, a shop page — simply stays open as a
+   *      guest. That is the point of guest browsing, and navigating
+   *      to the login form from here would undo it.
+   */
   async function handleSignOut() {
+    if (signingOut) return;
     setSigningOut(true);
-    // app/_layout.js listens to onAuthStateChange and redirects to
-    // /auth/login, so there is nothing to navigate to here.
-    await supabase.auth.signOut();
-    setSigningOut(false);
-    onClose?.();
+    try {
+      const { error: signOutError } = await supabase.auth.signOut();
+      // Logged rather than shown. The local session is gone whatever the
+      // server said, so this is a developer's problem, not the person's.
+      if (signOutError) console.warn('[auth] sign-out reported:', signOutError.message);
+    } catch (e) {
+      console.warn('[auth] sign-out threw:', e);
+    } finally {
+      setSigningOut(false);
+      onClose?.();
+    }
   }
 
   const initials = displayName
@@ -150,6 +189,27 @@ export function ProfileMenu({ visible, onClose }) {
             {loading ? (
               <View style={styles.loading}>
                 <ActivityIndicator color={colors.navy} />
+              </View>
+            ) : signedOut ? (
+              /* Reachable only if the session drops while the menu is
+                 open — AppShell will not mount it without one. There is
+                 nothing to show and nothing to retry, so it says so and
+                 offers the way back in, rather than rendering an empty
+                 identity card or a red error. */
+              <View style={styles.guest}>
+                <Ionicons name="person-circle-outline" size={30} color={colors.textFaint} />
+                <Text style={styles.guestTitle}>You're signed out</Text>
+                <Text style={styles.guestBody}>
+                  Log in to see your profile, booklists and orders.
+                </Text>
+                <Pressable
+                  onPress={handleSignIn}
+                  style={({ pressed }) => [styles.guestAction, pressed && styles.pressed]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Log in"
+                >
+                  <Text style={styles.guestActionText}>Log in</Text>
+                </Pressable>
               </View>
             ) : error ? (
               <View style={styles.errorBox}>
@@ -268,7 +328,10 @@ export function ProfileMenu({ visible, onClose }) {
             )}
 
             {/* --- actions ------------------------------------- */}
-            {isVendor && (
+            {/* Edit Profile edits a profile that is not there, and Sign
+                Out signs out a session that is already gone. Neither
+                belongs on a signed-out card. */}
+            {!signedOut && isVendor && (
               <Pressable
                 onPress={handleVendorDashboard}
                 style={({ pressed }) => [styles.vendorLink, pressed && styles.pressed]}
@@ -281,6 +344,7 @@ export function ProfileMenu({ visible, onClose }) {
               </Pressable>
             )}
 
+            {!signedOut && (
             <View style={styles.actions}>
               <Pressable
                 onPress={handleEditProfile}
@@ -313,6 +377,7 @@ export function ProfileMenu({ visible, onClose }) {
                 )}
               </Pressable>
             </View>
+            )}
           </View>
         </View>
       </Modal>
@@ -452,6 +517,26 @@ const styles = StyleSheet.create({
   actionGhostText: { color: colors.danger, fontWeight: '700', fontSize: font.md },
   actionDisabled: { backgroundColor: colors.borderStrong },
   pressed: { opacity: 0.85 },
+
+  guest: { alignItems: 'center', gap: spacing.sm, padding: spacing.xl },
+  guestTitle: { fontSize: font.md, fontWeight: '800', color: colors.text },
+  guestBody: {
+    fontSize: font.sm,
+    color: colors.textMuted,
+    textAlign: 'center',
+    lineHeight: 18,
+    maxWidth: 240,
+  },
+  guestAction: {
+    marginTop: spacing.sm,
+    backgroundColor: colors.navy,
+    borderRadius: radius.md,
+    paddingVertical: 11,
+    paddingHorizontal: spacing.xl,
+    minHeight: 42,
+    justifyContent: 'center',
+  },
+  guestActionText: { color: colors.onNavy, fontWeight: '800', fontSize: font.md },
 
   errorBox: {
     flexDirection: 'row',

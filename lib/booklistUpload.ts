@@ -1,6 +1,7 @@
 import { Platform } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { supabase } from '../utils/supabase';
+import { compressBooklistImage } from './imageCompression';
 import type { DispatchType, ItemCategory } from '../types/db';
 
 export const BUCKET = 'booklists';
@@ -164,7 +165,14 @@ async function pickImageNative(source: ImageSource): Promise<PickedImage | null>
     source === 'camera'
       ? await ImagePicker.launchCameraAsync({
           mediaTypes: ['images'],
-          quality: 0.8,
+          // 0.6, not 0.8. The OS re-encodes the JPEG before handing it
+          // over, and on native that is currently the only size control
+          // there is — see compressNative() in lib/imageCompression.ts.
+          // Printed text survives 0.6 comfortably; what it saves is
+          // roughly half the bytes on a phone camera photo, which is the
+          // difference between an upload that finishes and one that
+          // trips the 10s timeout on a mobile connection.
+          quality: 0.6,
           // Deliberately off. iOS forces a SQUARE crop here, which cuts
           // the bottom off a portrait sheet of paper — and the bottom of
           // a school booklist is more books. The whole page has to reach
@@ -173,7 +181,7 @@ async function pickImageNative(source: ImageSource): Promise<PickedImage | null>
         })
       : await ImagePicker.launchImageLibraryAsync({
           mediaTypes: ['images'],
-          quality: 0.8,
+          quality: 0.6,
           allowsEditing: false,
         });
 
@@ -219,21 +227,44 @@ export async function uploadBooklistImage(
   key: string,
   image: PickedImage
 ): Promise<string> {
-  const ext = (image.fileName.split('.').pop() ?? 'jpg').toLowerCase();
+  // Shrunk first, always. Every caller wants this — the review modal,
+  // the manual composer, the shop-specific page — and doing it here
+  // rather than at each call site is what stops one of them being
+  // forgotten and going back to uploading 8 MB. Never throws: a failed
+  // compression returns the original, so the upload still happens.
+  const { image: toUpload, compressed, beforeBytes, afterBytes } =
+    await compressBooklistImage(image);
+  if (compressed && beforeBytes && afterBytes) {
+    console.log(
+      `[booklist] compressed ${Math.round(beforeBytes / 1024)}KB -> ${Math.round(
+        afterBytes / 1024
+      )}KB before upload`
+    );
+  }
+
+  const ext = (toUpload.fileName.split('.').pop() ?? 'jpg').toLowerCase();
   const path = `${userId}/${key}.${ext}`;
 
-  // React Native's fetch handles file:// URIs; on web the uri is a blob:
-  // or data: URL. Both resolve to a Blob, which supabase-js accepts.
-  const response = await fetch(image.uri);
-  const blob = await response.blob();
+  try {
+    // React Native's fetch handles file:// URIs; on web the uri is a blob:
+    // or data: URL. Both resolve to a Blob, which supabase-js accepts.
+    const response = await fetch(toUpload.uri);
+    const blob = await response.blob();
 
-  const { error } = await supabase.storage.from(BUCKET).upload(path, blob, {
-    contentType: image.mimeType,
-    upsert: true,
-  });
-  if (error) throw error;
+    const { error } = await supabase.storage.from(BUCKET).upload(path, blob, {
+      contentType: toUpload.mimeType,
+      upsert: true,
+    });
+    if (error) throw error;
 
-  return path;
+    return path;
+  } finally {
+    // The compressed copy is a second blob: URL that only this function
+    // ever saw. The caller still holds and renders the original, so
+    // releasing that one here would blank the photo on screen — this
+    // frees ONLY the copy made above.
+    if (compressed) releaseImage(toUpload);
+  }
 }
 
 /** Signs a stored object path for display. The bucket is private. */
@@ -314,6 +345,24 @@ const PARSER_FUNCTION = 'parse-booklist';
  * Says what happened, and both ways forward — the photo is already
  * attached, so a shop can read the list even if we could not.
  */
+/**
+ * How long the photo step gets before the spinner is called off.
+ *
+ * Covers compress + upload as one budget, because to the buyer they are
+ * a single wait. Ten seconds is short enough that nobody thinks the app
+ * has died and long enough for a ~1 MB upload on a slow 3G connection.
+ *
+ * The timeout does NOT cancel the upload — fetch and supabase-js have no
+ * abort wired through here — it stops the SCREEN waiting on it. A slow
+ * upload that lands after the fact is harmless: the object is written,
+ * and nothing reads that path unless the buyer retries.
+ */
+export const IMAGE_PROCESSING_TIMEOUT_MS = 10_000;
+
+/** Shown when it does. Says the two things the buyer can act on. */
+export const SLOW_UPLOAD_MESSAGE =
+  'Upload taking too long. Please check your network or try a smaller photo.';
+
 export const OCR_UNREADABLE_NOTE =
   "We couldn't automatically read this photo. Please type your books below, or send the raw photo directly to shops.";
 

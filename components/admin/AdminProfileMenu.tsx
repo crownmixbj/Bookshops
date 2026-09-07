@@ -3,6 +3,7 @@ import { View, Text, Pressable, Modal, ScrollView, ActivityIndicator, StyleSheet
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { supabase } from '../../utils/supabase';
+import { getSessionUser } from '../../lib/loadState';
 import type { AdminAction } from '../../types/db';
 import { colors, spacing, radius, font, shadow } from '../../theme';
 import { useLayout } from '../../hooks/useLayout';
@@ -87,9 +88,9 @@ export function AdminProfileMenu({ visible, onClose }: Props) {
     (async () => {
       setLoading(true);
       try {
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
+        // getSessionUser(), not getUser(): the cached session, with no
+        // round trip and no AuthSessionMissingError when there is none.
+        const user = await getSessionUser();
         if (!active || !user) return;
         setEmail(user.email ?? '');
 

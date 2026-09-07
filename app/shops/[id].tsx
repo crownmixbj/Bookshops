@@ -11,6 +11,8 @@ import {
   type SendableBooklist,
 } from '../../hooks/useShopQuotes';
 import { SendBooklistSheet } from '../../components/shops/SendBooklistSheet';
+import { SignInPrompt } from '../../components/auth/SignInPrompt';
+import { useAuthGate } from '../../hooks/useAuthGate';
 import { describeBooklistError } from '../../lib/booklistUpload';
 import { colors, spacing, radius, font, formatNaira } from '../../theme';
 
@@ -36,6 +38,7 @@ export default function ShopDetailScreen() {
     sendBooklist,
   } = useShopQuotes(id);
 
+  const gate = useAuthGate();
   const [picking, setPicking] = useState(false);
   const [sending, setSending] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
@@ -216,9 +219,10 @@ export default function ShopDetailScreen() {
       <Pressable
         onPress={() => {
           setSendError(null);
-          // Straight to creating one when there is nothing to pick from —
-          // a picker with an empty list is a dead end dressed as a choice.
-          if (sendable.length === 0) {
+          // A guest has no saved lists to pick from, so the picker would
+          // be empty — send them to the composer instead, pre-addressed
+          // to this shop. The sign-in prompt comes when they dispatch.
+          if (!gate.signedIn || sendable.length === 0) {
             router.push({
               pathname: '/booklists/new-manual',
               params: { vendor: shop.id, shop: shop.store_name },
@@ -240,6 +244,16 @@ export default function ShopDetailScreen() {
           {quotes.length > 0 ? 'Send another booklist' : 'Send this shop a booklist'}
         </Text>
       </Pressable>
+
+      <SignInPrompt
+        visible={gate.promptVisible}
+        reason={gate.promptReason}
+        onClose={gate.closePrompt}
+        // Signs in inside the sheet, then runs whatever was
+        // blocked. Nothing navigates, so this screen keeps its
+        // state — including any photo held in memory.
+        onAuthenticated={gate.onAuthenticated}
+      />
 
       <SendBooklistSheet
         visible={picking}

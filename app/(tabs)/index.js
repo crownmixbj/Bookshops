@@ -22,7 +22,11 @@ import { OrderSummary } from '../../components/dashboard/OrderSummary';
 import { useLayout } from '../../hooks/useLayout';
 import { useDashboardData } from '../../hooks/useDashboardData';
 import { useCreateBooklist } from '../../hooks/useCreateBooklist';
-import { supabase } from '../../utils/supabase';
+import { useAuthGate } from '../../hooks/useAuthGate';
+import { SignInPrompt } from '../../components/auth/SignInPrompt';
+import { getSessionUserId, subscribeToAuthReloads } from '../../lib/loadState';
+import { loadGuestDraft, draftHasContent } from '../../lib/guestDraft';
+import { MANUAL_BOOKLIST_ROUTE } from '../../hooks/useCreateBooklist';
 import { colors, spacing, radius, font } from '../../theme';
 import { Footer } from '../../components/layout/Footer';
 
@@ -48,21 +52,53 @@ export default function DashboardScreen() {
    * same three choices and land in the same place.
    */
   const create = useCreateBooklist();
+  const gate = useAuthGate();
   const [created, setCreated] = useState(null);
   const [userId, setUserId] = useState(null);
+  /** A guest's unfinished list, read back from device storage. */
+  const [guestDraft, setGuestDraft] = useState(null);
 
   // The modal writes book_requests.buyer_id itself, so it needs the id
   // rather than the display name the dashboard hook returns.
+  //
+  // getSessionUserId(), not supabase.auth.getUser(): getUser() is a
+  // network round trip with no timeout, and this component fed its
+  // result straight into BooklistReviewModal as `userId`. A hung
+  // getUser() therefore looked exactly like being signed out — the
+  // photo modal opened with userId still null and sat on its spinner.
+  // getSessionUserId reads the cached session and gives up after 8s.
+  //
+  // Re-read on sign-in and sign-out too, so a guest who signs in from
+  // the prompt gets a real id without a reload.
   useEffect(() => {
     let alive = true;
-    supabase.auth
-      .getUser()
-      .then(({ data }) => alive && setUserId(data.user?.id ?? null))
+    const read = () => {
+      getSessionUserId()
+        .then((id) => alive && setUserId(id))
+        .catch(() => alive && setUserId(null));
+    };
+    read();
+    return subscribeToAuthReloads(read);
+  }, []);
+
+  // Only when signed out. A signed-in buyer's lists come from the
+  // database, and showing a leftover device draft beside them would be
+  // two competing copies of the same work.
+  useEffect(() => {
+    let alive = true;
+    if (userId) {
+      setGuestDraft(null);
+      return () => {
+        alive = false;
+      };
+    }
+    loadGuestDraft()
+      .then((draft) => alive && setGuestDraft(draftHasContent(draft) ? draft : null))
       .catch(() => {});
     return () => {
       alive = false;
     };
-  }, []);
+  }, [userId, created]);
   const toggleItem = (id) =>
     setSelection((prev) => ({ ...prev, [id]: prev[id] === false ? true : false }));
 
@@ -99,13 +135,20 @@ export default function DashboardScreen() {
   // screen, and it opens the same CreateBooklistModal My Booklists
   // opens. Nothing is written to book_requests until the buyer has
   // actually got a list — no more named-but-empty drafts.
+  // Open to everyone. A guest builds the list locally and is asked to
+  // sign in at the moment it would be dispatched — not before they know
+  // whether the app is any use to them.
   const handleCreateNew = create.open;
 
   // `orders` does have an insert policy, an amount column and the
   // delivery fields — what is missing is the payment provider and a
   // quote to charge against. /checkout says exactly that instead of
   // pretending to collect card details.
-  const handleCheckout = () => router.push('/checkout');
+  const handleCheckout = () =>
+    gate.requireAuth(
+      () => router.push('/checkout'),
+      'Log in to check out and pay for this order.'
+    );
 
   const mainColumn = (
     <View style={styles.colGap}>
@@ -126,6 +169,11 @@ export default function DashboardScreen() {
         // An ordered list is an order now, and this is where it went.
         orderedCount={orderedCount}
         onOpenOrders={() => router.push('/orders')}
+        // A guest's own list, kept on the device. Rendered instead of
+        // the empty state, because "no active booklists" over a list
+        // they typed ten minutes ago is simply wrong.
+        guestDraft={guestDraft}
+        onOpenGuestDraft={() => router.push(MANUAL_BOOKLIST_ROUTE)}
       />
       <PendingQuotes
         quotes={pendingQuotes}
@@ -226,6 +274,16 @@ export default function DashboardScreen() {
         <OrderSummary total={total} itemCount={itemCount} onCheckout={handleCheckout} loading={loading} />
       )}
 
+      <SignInPrompt
+        visible={gate.promptVisible}
+        reason={gate.promptReason}
+        onClose={gate.closePrompt}
+        // Signs in inside the sheet, then runs whatever was
+        // blocked. Nothing navigates, so this screen keeps its
+        // state — including any photo held in memory.
+        onAuthenticated={gate.onAuthenticated}
+      />
+
       <CreateBooklistModal
         visible={create.choosing}
         onClose={create.close}
@@ -245,6 +303,23 @@ export default function DashboardScreen() {
         image={create.image}
         initialSchool={create.title}
         onClose={create.clearImage}
+        // Steps aside while the sign-in sheet is up.
+        //
+        // SignInPrompt is written ABOVE this in the tree, and two
+        // sibling RN Modals paint in tree order on web — so the sheet
+        // opened behind this card and the guest saw nothing happen.
+        // This does not unmount anything: the review modal keeps its
+        // photo, its parsed lines and every edit, and comes straight
+        // back when the sheet closes.
+        suppressed={gate.promptVisible}
+        // A guest reaches the end of the review screen and is asked
+        // here, at the send, rather than at the camera button.
+        onRequireAuth={() =>
+          gate.requireAuth(
+            () => {},
+            'Create an account or log in to dispatch your booklist and receive quotes from local bookshops.'
+          )
+        }
         onSubmitted={async (message) => {
           setCreated(message);
           // Background re-read, not a refresh: the cards already on

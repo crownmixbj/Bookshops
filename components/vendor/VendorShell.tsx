@@ -33,6 +33,7 @@ export type VendorRoute =
   | '/vendor/payouts'
   | '/vendor/messages'
   | '/vendor/analytics'
+  | '/vendor/inventory'
   | '/vendor/support'
   | '/vendor/settings';
 
@@ -60,6 +61,8 @@ export const VENDOR_NAV: VendorNavItem[] = [
   // requests and track the answers, not keep lists of books.
   { key: 'quotes', label: 'Requests & Quotes', icon: 'pricetags-outline', route: '/vendor/quotes' },
   { key: 'orders', label: 'Orders', icon: 'cube-outline', route: '/vendor/orders' },
+  // What the shop sells, as opposed to what it has been asked for.
+  { key: 'inventory', label: 'Inventory', icon: 'library-outline', route: '/vendor/inventory' },
   { key: 'payouts', label: 'Payouts', icon: 'wallet-outline', route: '/vendor/payouts' },
   { key: 'messages', label: 'Messaging', icon: 'chatbubble-outline', route: '/vendor/messages' },
   { key: 'analytics', label: 'Analytics', icon: 'bar-chart-outline', route: '/vendor/analytics' },

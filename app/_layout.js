@@ -5,6 +5,7 @@ import { isConfigured, missingEnv } from '../utils/supabase';
 import { BootScreen, ConfigErrorScreen } from '../components/layout/BootScreen';
 import { AppShell } from '../components/layout/AppShell';
 import { colors } from '../theme';
+import { isAuthRoute, routeRequiresAuth } from '../lib/authGate';
 
 /**
  * Root layout: the auth gate, and the one place that decides where a
@@ -21,18 +22,18 @@ import { colors } from '../theme';
  * buyer hub to place their own order should stay there, and yanking them
  * back on every render would make that impossible.
  */
-/**
- * Top-level route segments a signed-out visitor may open.
- *
- * 'auth' is handled separately because a SIGNED-IN user on those screens
- * gets redirected onward; these ones are simply always allowed.
- */
-const PUBLIC_SEGMENTS = new Set(['services', 'legal', 'about', 'how-it-works', 'contact', 'careers']);
 
 export default function RootLayout() {
   const { session, role, roleResolved, profileMissing, roleError, initialized } =
     useAuthSession();
   const segments = useSegments();
+  /**
+   * Has the app tree been rendered once?
+   *
+   * Guards the splash below so it is a boot screen rather than a
+   * teardown — see the comment there.
+   */
+  const hasRendered = useRef(false);
 
   /** The user id we have already landed, so it happens once per sign-in. */
   const landedFor = useRef(null);
@@ -40,8 +41,7 @@ export default function RootLayout() {
   useEffect(() => {
     if (!initialized) return;
 
-    const inAuthGroup = segments[0] === 'auth';
-    const isPublic = inAuthGroup || PUBLIC_SEGMENTS.has(segments[0]);
+    const inAuthGroup = isAuthRoute(segments);
 
     if (!session) {
       // Clear the marker so the next sign-in lands again.
@@ -62,10 +62,13 @@ export default function RootLayout() {
       // empty tick as "at the buyer root", which is how a vendor
       // arriving on a confirmation link reaches /vendor.
       if (segments.length === 0) return;
-      // Info and legal pages must open without an account. Bouncing a
-      // visitor from the Privacy Policy to a login form is both hostile
-      // and, for a policy you are obliged to publish, wrong.
-      if (!isPublic) router.replace('/auth/login');
+
+      // Guests browse. Only the routes that read a buyer's own data or
+      // spend their money bounce to the login form — see lib/authGate.
+      // Everything else, the dashboard and shop pages included, opens
+      // without an account, and the sign-in prompt is raised at the
+      // moment a guest actually tries to act.
+      if (!inAuthGroup && routeRequiresAuth(segments)) router.replace('/auth/login');
       return;
     }
 
@@ -101,12 +104,30 @@ export default function RootLayout() {
     return <ConfigErrorScreen missing={missingEnv} />;
   }
 
-  // Hold the splash until both the session AND the role are known. The
-  // role gate only applies while signed in; a signed-out user resolves
-  // immediately.
-  if (!initialized || (session && !roleResolved)) {
+  // Hold the splash until both the session AND the role are known —
+  // but ONLY on the way in. The role gate exists so a vendor does not
+  // see the buyer dashboard flash past on a cold start; it was never
+  // meant to tear down an app that is already running.
+  //
+  // It was doing exactly that. Signing in from anywhere inside the app
+  // flips `session` truthy and `roleResolved` false for the length of
+  // one profile query, and this line swapped the ENTIRE Stack for a
+  // splash while that ran. Everything below it unmounted: the review
+  // modal, the booklist the guest had typed into it, and the picked
+  // photo — which on web is a blob: URL that cannot be recreated once
+  // its owner is gone. That, not the sign-in screen, is what made a
+  // guest lose their photo when they signed in.
+  //
+  // So the splash is now only shown before the tree has ever rendered.
+  // After that a role re-resolve happens underneath a live screen, and
+  // the effect above still routes a vendor to /vendor the moment the
+  // role arrives — a buyer, whose target is '/', is simply left where
+  // they are, with their work intact.
+  const booting = !initialized || (session && !roleResolved);
+  if (booting && !hasRendered.current) {
     return <BootScreen message={session && !roleResolved ? 'Signing you in…' : undefined} />;
   }
+  hasRendered.current = true;
 
   // A signed-in user with no profile row still gets into the app — the
   // buyer hub already explains the problem and offers a retry. Blocking
@@ -134,10 +155,12 @@ export default function RootLayout() {
   // screen. That is what keeps the header on screen — and what keeps
   // the search box from clearing — as you move around.
   //
-  // Signed out there is no chrome to draw: the auth screens and the
-  // public info pages stand alone.
-  const inAuthGroup = segments[0] === 'auth';
-  if (!session || inAuthGroup) return stack;
+  // The auth screens stand alone — a login form inside the app chrome
+  // reads as though you are already in. Everything else gets the shell,
+  // signed in or not: a guest browsing the hub needs the same header and
+  // navigation as anyone else, and rendering a bare stack for them was
+  // what made guest browsing look broken rather than open.
+  if (isAuthRoute(segments)) return stack;
 
   return <AppShell role={role ?? 'buyer'}>{stack}</AppShell>;
 }

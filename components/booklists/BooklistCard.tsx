@@ -248,13 +248,28 @@ export function BooklistCard({
 
   return (
     <View style={styles.card}>
-      <Pressable
-        onPress={() => setOpen((v) => !v)}
-        style={styles.head}
-        accessibilityRole="button"
-        accessibilityState={{ expanded: open }}
-        accessibilityLabel={`${booklist.school_name}, ${status.label}`}
-      >
+      {/*
+        Deliberately NOT accessibilityRole="button".
+
+        react-native-web maps that role onto a real <button> element
+        (see propsToAccessibilityComponent). This header contains the
+        "Photo attached" pill, which is itself a button, and a <button>
+        may not contain another one — hence React's
+        "<button> cannot contain a nested <button>" warning.
+
+        It was not only a console complaint. Nested buttons produce one
+        click that bubbles through both, so tapping "Photo attached"
+        opened the lightbox AND toggled the card underneath it; closing
+        the photo left the card expanded or collapsed at random.
+
+        So the row is a plain pressable region — still tappable
+        anywhere, which is the nice bit of the interaction — and the
+        chevron below is the real disclosure control that carries the
+        role, the expanded state and keyboard focus. Two sibling buttons
+        inside a non-button row is valid, and is how a disclosure widget
+        with a secondary action is meant to be built.
+      */}
+      <Pressable onPress={() => setOpen((v) => !v)} style={styles.head}>
         <View style={styles.thumb}>
           <Ionicons name="documents-outline" size={17} color={colors.navy} />
         </View>
@@ -313,7 +328,13 @@ export function BooklistCard({
             )}
             {booklist.image_path && (
               <Pressable
-                onPress={openPhoto}
+                onPress={(e) => {
+                  // The row behind this is pressable too. Without this
+                  // the press reaches both and the card toggles while
+                  // the photo opens over it.
+                  e.stopPropagation?.();
+                  openPhoto();
+                }}
                 hitSlop={6}
                 style={({ pressed }) => pressed && styles.pressed}
                 accessibilityRole="button"
@@ -335,12 +356,35 @@ export function BooklistCard({
               <Text style={styles.total}>{formatNaira(booklist.estimatedTotal)}</Text>
             </>
           )}
-          <Ionicons
-            name={open ? 'chevron-up' : 'chevron-down'}
-            size={16}
-            color={colors.textMuted}
-            style={{ alignSelf: 'flex-end', marginTop: 2 }}
-          />
+          <Pressable
+            onPress={(e) => {
+              // Same reason as the photo pill: the row behind is
+              // pressable, and a press that reaches both toggles twice
+              // and lands back where it started — so the chevron, the
+              // one control that looks like it opens the card, would be
+              // the only thing on it that did nothing.
+              e.stopPropagation?.();
+              setOpen((v) => !v);
+            }}
+            hitSlop={10}
+            style={({ pressed }) => [styles.disclosure, pressed && styles.pressed]}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: open }}
+            // aria-expanded as well: react-native-web does not translate
+            // accessibilityState.expanded into it, so without this the
+            // control announces as a plain button with no hint that it
+            // opens anything.
+            aria-expanded={open}
+            accessibilityLabel={`${booklist.school_name || 'Booklist'}, ${status.label}. ${
+              open ? 'Collapse' : 'Expand'
+            }`}
+          >
+            <Ionicons
+              name={open ? 'chevron-up' : 'chevron-down'}
+              size={16}
+              color={colors.textMuted}
+            />
+          </Pressable>
         </View>
       </Pressable>
 
@@ -481,15 +525,29 @@ export function BooklistCard({
         animationType="fade"
         onRequestClose={() => setPhotoOpen(false)}
       >
+        {/*
+          Scrim BEHIND the panel, not wrapped around it.
+
+          It used to wrap: a full-screen close button containing a
+          press-swallowing Pressable containing the close button — three
+          <button> elements inside one another, and the second source of
+          the nested-button warning. The swallower is the giveaway; a
+          child that exists only to stop its parent firing means the
+          parent is the wrong shape.
+
+          Absolutely positioned underneath instead, so tapping the dim
+          area closes and tapping the picture does nothing, with no
+          nesting and no press interception. Same arrangement as
+          CreateBooklistModal.
+        */}
         <Pressable
           style={styles.lightbox}
           onPress={() => setPhotoOpen(false)}
           accessibilityRole="button"
           accessibilityLabel="Close the photo"
-        >
-          {/* Swallows the press so tapping the picture itself does not
-              close the thing you are trying to look at. */}
-          <Pressable style={styles.lightboxInner} onPress={() => {}}>
+        />
+        <View style={styles.lightboxCentre} pointerEvents="box-none">
+          <View style={styles.lightboxInner}>
             <View style={styles.lightboxHead}>
               <Text style={styles.lightboxTitle} numberOfLines={1}>
                 {booklist.school_name || 'Booklist photo'}
@@ -522,8 +580,8 @@ export function BooklistCard({
                 accessibilityLabel={`The booklist photo for ${booklist.school_name}`}
               />
             ) : null}
-          </Pressable>
-        </Pressable>
+          </View>
+        </View>
       </Modal>
     </View>
   );
@@ -619,14 +677,15 @@ const styles = StyleSheet.create({
   itemUnitPrice: { fontSize: font.xs, color: colors.textMuted, marginTop: 1 },
   itemQtyWarn: { fontSize: font.xs, color: colors.warning, marginTop: 1 },
 
-  lightbox: {
+  lightbox: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(9,17,34,0.92)' },
+  lightboxCentre: {
     flex: 1,
-    backgroundColor: 'rgba(9,17,34,0.92)',
     alignItems: 'center',
     justifyContent: 'center',
     padding: spacing.lg,
   },
   lightboxInner: { width: '100%', maxWidth: 720, gap: spacing.md },
+  disclosure: { alignSelf: 'flex-end', marginTop: 2, padding: 2 },
   lightboxHead: {
     flexDirection: 'row',
     alignItems: 'center',

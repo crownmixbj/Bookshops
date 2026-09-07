@@ -20,8 +20,9 @@ import { getSessionUserId, subscribeToAuthReloads } from '../lib/loadState';
  *  3. You are not actually signed in. `auth.users` was empty at the time
  *     of writing, so sign up first.
  *
- * `diagnostics` tells you which one you are hitting; the hook falls back
- * to demo data so the layout is still workable meanwhile.
+ * `diagnostics` tells you which one you are hitting. There is no demo
+ * fallback: an empty dashboard shows an empty state, because invented
+ * booklists and invented shop ratings were being read as real ones.
  */
 
 /**
@@ -218,10 +219,14 @@ export function useDashboardData() {
       if (!current()) return;
 
       if (!uid) {
-        notes.push({
-          level: 'info',
-          message: 'Not signed in — showing demo data.',
-        });
+        // No diagnostic. Being signed out is not a fault condition — it
+        // is the normal state of someone who has just found the app, and
+        // browsing is deliberately open to them. The banner this used to
+        // push said "showing demo data", which stopped being true when
+        // the fixtures were deleted: it announced fallback content that
+        // no longer exists, above an empty state that already explains
+        // itself. A guest's own local draft, if they have one, is
+        // rendered by the dashboard from device storage.
         setData(EMPTY);
         setDiagnostics(notes);
         return;

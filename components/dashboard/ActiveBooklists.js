@@ -107,6 +107,8 @@ export function ActiveBooklists({
   onOpenRequest,
   onOpenDrafts,
   onOpenOrders,
+  onOpenGuestDraft,
+  guestDraft = null,
   draftCount = 0,
   orderedCount = 0,
   loading,
@@ -125,12 +127,71 @@ export function ActiveBooklists({
     );
   }
 
+  // A guest's own unfinished list, read back from device storage. It is
+  // the one thing that must not be described as "no booklists": they
+  // typed it, it is theirs, and it is sitting right there — telling them
+  // the card is empty is how that work gets abandoned.
+  if (!requests?.length && guestDraft) {
+    const titled = guestDraft.lines.filter((line) => line.title.trim().length > 0);
+    return (
+      <Card title="Active Booklist Requests">
+        <Pressable
+          onPress={onOpenGuestDraft}
+          style={({ pressed }) => [styles.draft, pressed && styles.draftPressed]}
+          accessibilityRole="button"
+          accessibilityLabel={`Continue your booklist for ${guestDraft.school || 'your school'}`}
+        >
+          <View style={styles.draftHead}>
+            <View style={styles.draftIcon}>
+              <Ionicons name="create-outline" size={18} color={colors.navy} />
+            </View>
+            <View style={styles.draftHeadText}>
+              <Text style={styles.draftTitle} numberOfLines={1}>
+                {guestDraft.school || 'Untitled booklist'}
+              </Text>
+              <Text style={styles.draftMeta} numberOfLines={1}>
+                {[
+                  guestDraft.classLevel,
+                  `${titled.length} item${titled.length === 1 ? '' : 's'}`,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </Text>
+            </View>
+            <Pill label="Not sent" tone="warning" />
+          </View>
+
+          {titled.slice(0, 3).map((line) => (
+            <Text key={line.key} style={styles.draftLine} numberOfLines={1}>
+              {line.quantity > 1 ? `${line.quantity}× ` : ''}
+              {line.title}
+            </Text>
+          ))}
+          {titled.length > 3 && (
+            <Text style={styles.draftLine}>+{titled.length - 3} more</Text>
+          )}
+
+          <View style={styles.draftFoot}>
+            <Text style={styles.emptyActionText}>Continue this booklist</Text>
+            <Ionicons name="chevron-forward" size={15} color={colors.navy} />
+          </View>
+        </Pressable>
+
+        {/* Said plainly rather than discovered later. This list exists on
+            one device and nowhere else, and no shop has seen it. */}
+        <Text style={styles.draftNote}>
+          Saved on this device only. Sign in to send it to shops and get quotes.
+        </Text>
+      </Card>
+    );
+  }
+
   if (!requests?.length) {
     // Neither drafts nor ordered lists appear in this card — drafts are
     // still being written, and an ordered list has become an order and
     // lives on My Orders. Telling a buyer who has either that they have
-    // "no booklists yet" would be false, so point at where their work
-    // actually is. Drafts first: they are the ones still needing a hand.
+    // nothing would be false, so point at where their work actually is.
+    // Drafts first: they are the ones still needing a hand.
     const hasDrafts = draftCount > 0;
     const hasOrders = orderedCount > 0;
 
@@ -140,7 +201,7 @@ export function ActiveBooklists({
       ? `Nothing awaiting a decision. Your ${orderedCount} ordered booklist${
           orderedCount === 1 ? '' : 's'
         } moved to My Orders.`
-      : 'No booklists yet. Snap a photo of a school booklist to get quotes from nearby shops.';
+      : 'Upload or type your school booklist to receive itemized quotes from local bookshops.';
 
     const action = hasDrafts
       ? { label: 'Open My Booklists', onPress: onOpenDrafts, hint: 'Open My Booklists to finish a draft' }
@@ -158,6 +219,7 @@ export function ActiveBooklists({
             size={26}
             color={colors.textFaint}
           />
+          <Text style={styles.emptyTitle}>No active booklists</Text>
           <Text style={styles.emptyText}>{copy}</Text>
           {action?.onPress && (
             <Pressable
@@ -371,6 +433,44 @@ const styles = StyleSheet.create({
   },
 
   empty: { alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.xl },
+  emptyTitle: { fontSize: font.md, fontWeight: '800', color: colors.text, textAlign: 'center' },
+
+  draft: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    gap: 6,
+  },
+  draftPressed: { backgroundColor: colors.surfaceMuted },
+  draftHead: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  draftHeadText: { flex: 1, minWidth: 0 },
+  draftIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  draftTitle: { fontSize: font.md, fontWeight: '700', color: colors.text },
+  draftMeta: { fontSize: font.sm, color: colors.textMuted, marginTop: 1 },
+  draftLine: { fontSize: font.sm, color: colors.textMuted, paddingLeft: 46 },
+  draftFoot: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingTop: spacing.sm,
+    marginTop: 2,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  draftNote: {
+    fontSize: font.xs,
+    color: colors.textFaint,
+    lineHeight: 16,
+    marginTop: spacing.sm,
+  },
   emptyAction: {
     flexDirection: 'row',
     alignItems: 'center',

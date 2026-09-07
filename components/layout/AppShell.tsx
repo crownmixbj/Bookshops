@@ -5,6 +5,18 @@ import { router, usePathname } from 'expo-router';
 
 import { TopBar } from '../dashboard/TopBar';
 import { Sidebar, NAV_ITEMS } from '../dashboard/Sidebar';
+import { SignInPrompt } from '../auth/SignInPrompt';
+import { useAuthGate } from '../../hooks/useAuthGate';
+
+/**
+ * Buyer nav keys a guest cannot open.
+ *
+ * Keyed off the nav item, not the path, so it stays readable next to
+ * NAV_ITEMS; lib/authGate is still the authority for the routes
+ * themselves, and the two agree — these are exactly the buyer-data
+ * entries in that deny-list. Dashboard, Bookshops and Help stay open.
+ */
+const GUEST_BLOCKED_NAV = new Set(['booklists', 'orders', 'settings']);
 import { ProfileMenu } from '../profile/ProfileMenu';
 import { SupportMenu } from '../support/SupportMenu';
 import { SupportDrawer } from '../support/SupportDrawer';
@@ -102,6 +114,8 @@ export function AppShell({ role, children }: { role: ShellRole; children: ReactN
     setChatOpen(true);
   }, []);
 
+  const gate = useAuthGate();
+
   const shellValue = useMemo(
     () => ({ search, setSearch, vendor, openSupportChat, role, displayName, refreshProfile, insideShell: true }),
     [search, vendor, openSupportChat, role, displayName, refreshProfile]
@@ -126,7 +140,21 @@ export function AppShell({ role, children }: { role: ShellRole; children: ReactN
       | '/support'
       | '/settings'
       | null;
-    if (route) router.push(route);
+    if (!route) return;
+
+    // Caught here rather than at the destination. The router guard would
+    // also stop a guest, but only by replacing the screen with a login
+    // form — so a tap on "My Orders" threw away the page they were
+    // reading. Asking before the transition leaves them where they are.
+    if (GUEST_BLOCKED_NAV.has(item.key)) {
+      gate.requireAuth(
+        () => router.push(route),
+        'Log in or create an account to manage your booklists and track orders.'
+      );
+      return;
+    }
+
+    router.push(route);
   }
 
   async function navigateVendor(item: VendorNavItem) {
@@ -141,6 +169,26 @@ export function AppShell({ role, children }: { role: ShellRole; children: ReactN
     if (item.route) router.push(item.route);
   }
 
+  /**
+   * The avatar.
+   *
+   * A guest pressing it used to open the profile dropdown, which asked
+   * Supabase who they were, got told "Auth session missing!", and
+   * rendered that sentence as a red error with a Retry that could never
+   * succeed — see the note in hooks/useProfileDetails.js. The menu is an
+   * authenticated surface and has nothing to show without a session, so
+   * a guest is offered the sign-in sheet instead.
+   *
+   * requireAuth returns false while the session is still resolving, and
+   * that is the right answer: nothing opens for the one frame of a cold
+   * start, rather than the menu flashing an error and closing itself.
+   */
+  const openProfile = () =>
+    gate.requireAuth(
+      () => setProfileOpen(true),
+      'Log in to see your profile, booklists and orders.'
+    );
+
   const topBar =
     role === 'vendor' ? (
       <VendorTopBar
@@ -150,7 +198,7 @@ export function AppShell({ role, children }: { role: ShellRole; children: ReactN
         busyMode={vendor?.busy_mode ?? false}
         onBusyModeChange={setBusyMode}
         onMenuPress={() => setDrawerOpen(true)}
-        onProfilePress={() => setProfileOpen(true)}
+        onProfilePress={openProfile}
       />
     ) : role === 'admin' ? (
       <AdminTopBar
@@ -160,7 +208,7 @@ export function AppShell({ role, children }: { role: ShellRole; children: ReactN
         query={search}
         onQueryChange={setSearch}
         onMenuPress={() => setDrawerOpen(true)}
-        onProfilePress={() => setProfileOpen(true)}
+        onProfilePress={openProfile}
         alerts={alerts.total}
       />
     ) : (
@@ -168,7 +216,7 @@ export function AppShell({ role, children }: { role: ShellRole; children: ReactN
         query={search}
         onQueryChange={setSearch}
         onMenuPress={() => setDrawerOpen(true)}
-        onProfilePress={() => setProfileOpen(true)}
+        onProfilePress={openProfile}
         onSupportPress={() => setSupportOpen(true)}
       />
     );
@@ -198,17 +246,28 @@ export function AppShell({ role, children }: { role: ShellRole; children: ReactN
       />
     );
 
+  /**
+   * Never mounted without a session.
+   *
+   * openProfile already gates the press, but `profileOpen` can outlive
+   * the session — a token expiring, or a sign-out in another tab, while
+   * the menu is up. Tying visibility to the session as well means the
+   * menu closes itself in that moment rather than staying open over data
+   * that no longer belongs to anyone.
+   */
+  const accountMenuVisible = profileOpen && gate.signedIn;
+
   const accountMenu =
     role === 'vendor' ? (
       <VendorProfileMenu
-        visible={profileOpen}
+        visible={accountMenuVisible}
         vendor={vendor}
         onClose={() => setProfileOpen(false)}
       />
     ) : role === 'admin' ? (
-      <AdminProfileMenu visible={profileOpen} onClose={() => setProfileOpen(false)} />
+      <AdminProfileMenu visible={accountMenuVisible} onClose={() => setProfileOpen(false)} />
     ) : (
-      <ProfileMenu visible={profileOpen} onClose={() => setProfileOpen(false)} />
+      <ProfileMenu visible={accountMenuVisible} onClose={() => setProfileOpen(false)} />
     );
 
   return (
@@ -241,6 +300,18 @@ export function AppShell({ role, children }: { role: ShellRole; children: ReactN
           {sidebar}
           <View style={styles.content}>{children}</View>
         </View>
+
+        {/* Mounted at the shell, not per screen: the nav is here, so the
+            prompt it raises has to outlive whichever screen is showing. */}
+        <SignInPrompt
+          visible={gate.promptVisible}
+          reason={gate.promptReason}
+          onClose={gate.closePrompt}
+          // The nav intercepts (My Booklists, My Orders, Settings) put
+          // their navigation in the pending action, so signing in here
+          // takes the guest where they were trying to go.
+          onAuthenticated={gate.onAuthenticated}
+        />
       </SafeAreaView>
     </ShellProvider>
   );

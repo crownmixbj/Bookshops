@@ -1,3 +1,4 @@
+import type { User } from '@supabase/supabase-js';
 import { supabase } from '../utils/supabase';
 
 /**
@@ -41,13 +42,30 @@ export async function withTimeout<T>(
  * does not take our word for who we are.
  */
 export async function getSessionUserId(): Promise<string | null> {
+  return (await getSessionUser())?.id ?? null;
+}
+
+/**
+ * The whole cached user, for screens that need more than the id.
+ *
+ * Same reasoning as getSessionUserId, plus one more that matters for
+ * anything rendered to a signed-out visitor: supabase-js's getUser()
+ * does not return `{ user: null }` when nobody is signed in — it
+ * returns an AuthSessionMissingError, whose message is the bare string
+ * "Auth session missing!". Any caller that treats an error as a failure
+ * shows that sentence to a guest as though something had broken.
+ *
+ * getSession() has no such behaviour: no session is `null`, which is
+ * what being signed out actually is.
+ */
+export async function getSessionUser(): Promise<User | null> {
   const { data, error } = await withTimeout(
     supabase.auth.getSession(),
     8000,
     'Checking your sign-in'
   );
   if (error) throw error;
-  return data.session?.user?.id ?? null;
+  return data.session?.user ?? null;
 }
 
 /**

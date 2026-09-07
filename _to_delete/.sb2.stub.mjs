@@ -1,1 +1,0 @@
-export const supabase = { from: (t) => globalThis.__from(t), functions: { invoke: async () => ({data:null,error:null}) } };

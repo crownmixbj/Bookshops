@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -18,6 +18,8 @@ import {
   draftImageKey,
   blankItem,
   OCR_UNREADABLE_NOTE,
+  IMAGE_PROCESSING_TIMEOUT_MS,
+  SLOW_UPLOAD_MESSAGE,
   guessCategory,
   DRAFT_STATUS,
   PUBLISHED_STATUS,
@@ -26,6 +28,7 @@ import {
   type ParsedItem,
 } from '../../lib/booklistUpload';
 import { QuantityStepper } from './QuantityStepper';
+import { BooklistSummary, ConfirmAccuracyCheckbox } from './ConfirmAccuracy';
 import {
   AUTHOR_PLACEHOLDER,
   AUTHOR_REQUIRED_MESSAGE,
@@ -33,6 +36,7 @@ import {
   lineProblem,
   validateLines,
 } from '../../lib/booklistValidation';
+import { withTimeout } from '../../lib/loadState';
 import { colors, spacing, radius, font, shadow } from '../../theme';
 import { useLayout } from '../../hooks/useLayout';
 
@@ -52,6 +56,35 @@ interface Props {
   onClose: () => void;
   /** Called after the request row and its items exist. */
   onSubmitted: (message: string) => void | Promise<void>;
+  /**
+   * Raise the sign-in sheet. Called when a guest presses send.
+   *
+   * A guest is allowed all the way through this screen — typing the list
+   * is the part that takes effort, and asking for an account before they
+   * have seen whether the app can help them is the wall the lazy-auth
+   * work removed. What needs an identity is the row in book_requests,
+   * so that is where the ask belongs.
+   */
+  onRequireAuth?: () => void;
+  /**
+   * Hide the card without ending the flow.
+   *
+   * Two React Native Modals mounted as siblings do not reliably stack:
+   * on web they paint in tree order, so whichever is written later wins
+   * regardless of who opened whom, and on iOS presenting a second one
+   * over a live one is undefined. On the dashboard the sign-in sheet is
+   * written BEFORE this modal, so it opened underneath — the guest
+   * pressed "Sign in to Send", something did open, and it was invisible
+   * behind this card.
+   *
+   * Rather than fight z-index across two portals, the parent sets this
+   * while the sheet is up and this card steps aside. Note it is separate
+   * from `visible` on purpose: `visible` drives the upload-and-parse
+   * effect, so toggling THAT would re-run the upload and reset() the
+   * buyer's typed list — the very thing the sign-in flow exists to
+   * preserve. This only touches what is painted.
+   */
+  suppressed?: boolean;
 }
 
 type Phase = 'working' | 'review' | 'submitting';
@@ -79,6 +112,8 @@ export function BooklistReviewModal({
   initialSchool = '',
   onClose,
   onSubmitted,
+  onRequireAuth,
+  suppressed = false,
 }: Props) {
   const { isMobile } = useLayout();
 
@@ -109,6 +144,40 @@ export function BooklistReviewModal({
    * has reached the author field — is nagging, not helping.
    */
   const [showProblems, setShowProblems] = useState(false);
+  /**
+   * The accuracy confirmation. Reset on every open — a tick carried over
+   * from the last booklist is not a confirmation of this one.
+   */
+  const [confirmed, setConfirmed] = useState(false);
+  /**
+   * Bumped by "Try again". The processing effect is keyed on it, so a
+   * retry re-runs upload and parse without the buyer re-picking the
+   * photo — which on web they could not do anyway, because the file
+   * input is long gone and the blob is all that is left of their choice.
+   */
+  const [attempt, setAttempt] = useState(0);
+  /** True when the photo step ran past IMAGE_PROCESSING_TIMEOUT_MS. */
+  const [timedOut, setTimedOut] = useState(false);
+  /**
+   * Which send a guest was stopped on, kept across the sign-in sheet.
+   *
+   * A ref rather than state: the sheet renders above this modal without
+   * unmounting it, so nothing here needs to re-render while they type a
+   * password — and a stray render mid-sign-in is how a half-typed form
+   * loses focus.
+   */
+  const pendingSubmit = useRef<boolean | null>(null);
+  /** The body scroller, so a validation failure can be scrolled to. */
+  const scrollRef = useRef<ScrollView>(null);
+  /**
+   * Where the Review & confirm block sits inside that scroller.
+   *
+   * Captured from onLayout rather than measured on demand: measure() is
+   * async and needs a node handle that react-native-web does not always
+   * give for a plain View, and a y-offset recorded at layout time is
+   * exact on both platforms.
+   */
+  const confirmY = useRef(0);
 
   const reset = useCallback(() => {
     setPhase('working');
@@ -123,10 +192,25 @@ export function BooklistReviewModal({
     setShowPhoto(false);
     setReadOk(null);
     setShowProblems(false);
+    setConfirmed(false);
+    setTimedOut(false);
   }, []);
 
   /**
-   * Upload, then parse.
+   * Upload, then parse — or, for a guest, neither.
+   *
+   * Three things had to change here, and they were all the same bug
+   * wearing different hats: the screen could enter `working` and never
+   * leave it.
+   *
+   *   1. The guard used to include `!userId`, so a guest opened this
+   *      modal, the effect returned immediately, and nothing ever set
+   *      phase to 'review'. The spinner said "Uploading your photo…"
+   *      forever over an upload that was never attempted.
+   *   2. Nothing bounded the upload. A large photo on a slow connection
+   *      is the same spinner, just earned honestly.
+   *   3. `finally` set 'review' only if the whole body reached it, so
+   *      an unexpected throw before the inner try left it hanging.
    *
    * `cancelled` guards every setState after an await: the buyer can
    * close this modal mid-parse, and without the guard the parse would
@@ -134,25 +218,65 @@ export function BooklistReviewModal({
    * reopening it showed the previous photo's books.
    */
   useEffect(() => {
-    if (!visible || !image || !userId) return;
+    if (!visible || !image) return;
     let cancelled = false;
 
     (async () => {
       reset();
+
+      // ---- guest ---------------------------------------------------
+      // No upload: the `booklists` bucket's insert policy requires the
+      // object path to start with the uploader's user id, so there is
+      // no path a signed-out person could legally write to. And no
+      // parse: parse-booklist takes a stored path and refuses one the
+      // caller does not own, by design — it holds the API key, and an
+      // endpoint anonymous callers can post images to is an endpoint
+      // anyone can spend the project's credits on.
+      //
+      // So the photo stays exactly where it already is, on the device,
+      // and the buyer types the list. That is the same screen a
+      // signed-in buyer gets when OCR cannot read their photo, which is
+      // why it needs no separate design.
+      if (!userId) {
+        if (cancelled) return;
+        setReadOk(false);
+        setSchool(initialSchool.trim());
+        setItems([blankItem()]);
+        setShowPhoto(true);
+        setNotice(
+          'Your photo is kept on this device for now — reading it automatically needs an account. ' +
+            'Type the books below, and the photo is attached and sent to shops when you sign in.'
+        );
+        setPhase('review');
+        return;
+      }
+
+      // ---- signed in ----------------------------------------------
       let path: string | null = null;
 
       try {
         setStep('Uploading your photo…');
-        path = await uploadBooklistImage(userId, draftImageKey(), image);
+        // Compression happens inside uploadBooklistImage, so this one
+        // budget covers shrinking and sending together — which is what
+        // the buyer is actually waiting through.
+        path = await withTimeout(
+          uploadBooklistImage(userId, draftImageKey(), image),
+          IMAGE_PROCESSING_TIMEOUT_MS,
+          'Photo upload'
+        );
         if (cancelled) return;
         setImagePath(path);
       } catch (e) {
         if (cancelled) return;
-        // Not fatal. The photo is a reference for the buyer and for the
-        // vendor; the list itself is what gets quoted. Fall through to
-        // an empty review form rather than dead-ending them.
+        const slow = /timed out/i.test((e as Error).message ?? '');
+        if (slow) setTimedOut(true);
+        // Not fatal either way. The photo is a reference for the buyer
+        // and for the vendor; the list itself is what gets quoted. Fall
+        // through to the typing form rather than dead-ending them.
         setNotice(
-          `Your photo could not be uploaded (${(e as Error).message}). You can still add the books by hand.`
+          slow
+            ? SLOW_UPLOAD_MESSAGE
+            : `Your photo could not be uploaded (${(e as Error).message}). You can still add the books by hand.`
         );
       }
 
@@ -163,9 +287,17 @@ export function BooklistReviewModal({
         // is no fixture path any more — a booklist of books the buyer
         // never asked for is worse than no booklist at all, because it
         // gets quoted and paid for.
+        //
+        // Timed out as well as the upload. The Edge Function signs a URL
+        // and waits on a vision model, and a model that never answers
+        // must not become a permanent spinner.
         const result = path
-          ? await parseBooklistImage(path)
-          : { school_name: '', class_level: '', items: [], parsed: false, note: OCR_UNREADABLE_NOTE };
+          ? await withTimeout(
+              parseBooklistImage(path),
+              IMAGE_PROCESSING_TIMEOUT_MS,
+              'Reading the photo'
+            )
+          : { school_name: '', class_level: '', items: [], parsed: false, note: '' };
         if (cancelled) return;
 
         const read = result.parsed && result.items.length > 0;
@@ -177,20 +309,28 @@ export function BooklistReviewModal({
         // One empty row either way, so there is somewhere to start
         // typing. Nothing is pre-filled that did not come off the photo.
         setItems(read ? result.items : [blankItem()]);
-        if (result.note) setNotice(result.note);
+        // Only if the upload did not already leave one. Overwriting the
+        // upload's message with the parser's would hide the fact that
+        // the photo never arrived, which is the more important of the
+        // two — it is the one that means shops will not see it.
+        if (result.note) setNotice((current) => current ?? result.note);
         // Nothing was read, so the photo is the only copy of the list
         // the buyer has in front of them. Open it — they are about to
         // type from it.
         if (!read) setShowPhoto(true);
       } catch (e) {
         if (cancelled) return;
+        const slow = /timed out/i.test((e as Error).message ?? '');
+        if (slow) setTimedOut(true);
         setReadOk(false);
-        setSchool(initialSchool.trim());
-        setNotice(OCR_UNREADABLE_NOTE);
-        setItems([blankItem()]);
+        setSchool((current) => current || initialSchool.trim());
+        setNotice((current) => current ?? (slow ? SLOW_UPLOAD_MESSAGE : OCR_UNREADABLE_NOTE));
+        setItems((current) => (current.length ? current : [blankItem()]));
         setShowPhoto(true);
         console.warn('[booklist] parse failed:', e);
       } finally {
+        // Outside every branch above, deliberately. This one line is
+        // what guarantees the spinner ends, whatever went wrong.
         if (!cancelled) setPhase('review');
       }
     })();
@@ -200,9 +340,10 @@ export function BooklistReviewModal({
     };
     // Keyed on image.uri, not the object: a re-render that hands over a
     // new wrapper for the SAME photo must not upload and parse it twice,
-    // and a genuinely new photo always has a new uri.
+    // and a genuinely new photo always has a new uri. `attempt` is here
+    // so "Try again" re-runs it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, image?.uri, userId, initialSchool, reset]);
+  }, [visible, image?.uri, userId, initialSchool, attempt, reset]);
 
   /* ---------------- item editing ---------------- */
 
@@ -239,13 +380,71 @@ export function BooklistReviewModal({
    * is exactly what happens over WhatsApp today.
    */
   const photoOnly = selected.length === 0 && Boolean(imagePath);
+  /**
+   * Note what is NOT in here: userId.
+   *
+   * A guest gets a live, pressable button, and the sign-in ask happens
+   * when they press it. A greyed-out button with no explanation is how
+   * someone concludes the app is broken and closes it.
+   */
   const canSubmit =
     phase === 'review' &&
-    Boolean(userId) &&
     school.trim().length > 0 &&
-    (verdict.ok || photoOnly);
+    (verdict.ok || photoOnly) &&
+    confirmed;
+
+  /**
+   * The one reason worth telling them about, or null when it can be sent.
+   *
+   * Ordered by where the fix is on the page — top first — so the message
+   * and the scroll always agree. Naming exactly one thing at a time is
+   * deliberate: a list of everything wrong with a form is read as a
+   * wall, and they will fix them one at a time anyway.
+   */
+  const blocker: { message: string; scrollToConfirm: boolean } | null =
+    phase !== 'review'
+      ? null
+      : school.trim().length === 0
+      ? { message: 'Add the school name before sending this list.', scrollToConfirm: false }
+      : !verdict.ok && !photoOnly
+      ? {
+          message:
+            verdict.message ??
+            'Give every ticked book a title and an author or publisher, or untick it.',
+          scrollToConfirm: false,
+        }
+      : !confirmed
+      ? { message: 'Please tick the confirmation checkbox to proceed.', scrollToConfirm: true }
+      : null;
 
   /* ---------------- submission ---------------- */
+
+  /**
+   * Pick the send back up once a session exists.
+   *
+   * Only when they were mid-send AND the accuracy box is still ticked
+   * for this same unchanged list — which it must have been to reach the
+   * intercept at all. That tick is a real confirmation about data that
+   * has not moved since, so asking for it twice is friction with no
+   * safety in it. Anything else just leaves the form as it is and waits
+   * for a press: sending a booklist to shops puts a request in front of
+   * businesses who have to answer it, and that is not something to do
+   * on someone's behalf because they happened to log in.
+   *
+   * This works only because the sign-in sheet no longer navigates. The
+   * modal, the photo and every typed line are still here.
+   */
+  useEffect(() => {
+    if (!userId || pendingSubmit.current === null) return;
+    const publish = pendingSubmit.current;
+    pendingSubmit.current = null;
+    if (!confirmed || phase !== 'review') return;
+    void handleSave(publish);
+    // handleSave is redeclared every render and depends on all of the
+    // form state; keying this effect on it would re-run on every
+    // keystroke. The session arriving is the only trigger that matters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
 
   /**
    * Saves the reviewed list.
@@ -254,8 +453,52 @@ export function BooklistReviewModal({
    * insert-then-update: a second call that fails would leave the buyer
    * looking at a success message for a list no vendor can see.
    */
+  /**
+   * What the buttons call. Always does something.
+   *
+   * The bug this replaces: both buttons carried `disabled={!canSubmit}`,
+   * and canSubmit requires the accuracy tick. So the ordinary first
+   * press — list typed, box not yet ticked, because the box sits below
+   * the fold — landed on a genuinely disabled button. No press event, no
+   * message, no movement. "Sign in to Send does nothing" was literally
+   * true, and nothing on screen said why.
+   *
+   * Now the press is always received, and a press that cannot go through
+   * has to explain itself: it names the one thing in the way, marks the
+   * offending rows, and scrolls the reason into view. A disabled control
+   * that will not say what it wants is worse than no control.
+   */
+  function attemptSave(publish: boolean) {
+    if (busy) return;
+
+    if (blocker) {
+      setShowProblems(true);
+      setError(blocker.message);
+      // The confirm block is the last thing on a long scroller, so the
+      // buyer pressing the button often cannot see it at all. Anything
+      // above it is already on screen next to its own red field, and
+      // yanking the page away from where they are looking would be
+      // worse than leaving them there with the message.
+      if (blocker.scrollToConfirm) {
+        scrollRef.current?.scrollTo({ y: Math.max(0, confirmY.current - 12), animated: true });
+      }
+      return;
+    }
+
+    void handleSave(publish);
+  }
+
   async function handleSave(publish: boolean) {
-    if (!userId || phase !== 'review') return;
+    if (phase !== 'review') return;
+
+    // The intercept. Everything they typed stays on screen behind the
+    // sheet — this modal is not unmounted by it — so signing in and
+    // coming back costs them nothing they have already done.
+    if (!userId) {
+      pendingSubmit.current = publish;
+      onRequireAuth?.();
+      return;
+    }
 
     // Re-checked here, not just on the button: the button is one way in,
     // and a line can be edited back into an invalid state between a
@@ -263,6 +506,13 @@ export function BooklistReviewModal({
     if (!photoOnly && !verdict.ok) {
       setShowProblems(true);
       setError(verdict.message);
+      return;
+    }
+    // Checked here as well as on the button: the button is one way in,
+    // and the tick can be cleared between a render and a press.
+    if (!confirmed) {
+      setShowProblems(true);
+      setError('Confirm the titles, authors and publishers before sending this list.');
       return;
     }
     if (!canSubmit) return;
@@ -353,7 +603,15 @@ export function BooklistReviewModal({
   const busy = phase === 'working' || phase === 'submitting';
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={busy ? undefined : onClose}>
+    <Modal
+      // `visible && !suppressed`, never `visible` alone — see the
+      // `suppressed` prop. The component stays mounted either way, so
+      // every piece of state behind this card survives the sheet.
+      visible={visible && !suppressed}
+      transparent
+      animationType="fade"
+      onRequestClose={busy ? undefined : onClose}
+    >
       <Pressable
         style={styles.scrim}
         onPress={busy ? undefined : onClose}
@@ -384,7 +642,11 @@ export function BooklistReviewModal({
               <Text style={styles.loadingText}>{step}</Text>
             </View>
           ) : (
-            <ScrollView style={styles.body} keyboardShouldPersistTaps="handled">
+            <ScrollView
+              ref={scrollRef}
+              style={styles.body}
+              keyboardShouldPersistTaps="handled"
+            >
               {/* ---- header info ---- */}
               <Text style={styles.label}>School</Text>
               <TextInput
@@ -451,8 +713,34 @@ export function BooklistReviewModal({
 
               {notice && (
                 <View style={styles.notice}>
-                  <Ionicons name="information-circle" size={15} color={colors.warning} />
-                  <Text style={styles.noticeText}>{notice}</Text>
+                  <Ionicons
+                    name={timedOut ? 'time-outline' : 'information-circle'}
+                    size={15}
+                    color={colors.warning}
+                  />
+                  <View style={styles.noticeBody}>
+                    <Text style={styles.noticeText}>{notice}</Text>
+                    {/* Offered only for a timeout, and only to someone
+                        who can actually retry. A slow connection is the
+                        one failure here that is worth another go — the
+                        photo is still in memory, so retrying costs a
+                        press rather than another trip to the camera. */}
+                    {timedOut && Boolean(userId) && (
+                      <Pressable
+                        onPress={() => {
+                          setTimedOut(false);
+                          setAttempt((n) => n + 1);
+                          setPhase('working');
+                        }}
+                        style={({ pressed }) => [styles.retry, pressed && styles.pressed]}
+                        accessibilityRole="button"
+                        accessibilityLabel="Try uploading the photo again"
+                      >
+                        <Ionicons name="refresh" size={14} color={colors.navy} />
+                        <Text style={styles.retryText}>Try again</Text>
+                      </Pressable>
+                    )}
+                  </View>
                 </View>
               )}
 
@@ -578,6 +866,29 @@ export function BooklistReviewModal({
                 </View>
               )}
 
+              {/* ---- review & confirm, immediately above the buttons ---- */}
+              <View
+                style={styles.confirmBlock}
+                onLayout={(e) => {
+                  confirmY.current = e.nativeEvent.layout.y;
+                }}
+              >
+                <Text style={styles.confirmHeading}>Review &amp; confirm</Text>
+                <BooklistSummary
+                  itemCount={selected.length}
+                  copyCount={selected.reduce((n, i) => n + (Number(i.quantity) || 1), 0)}
+                  school={school}
+                  classLevel={classLevel}
+                  hasPhoto={Boolean(imagePath)}
+                />
+                <ConfirmAccuracyCheckbox
+                  checked={confirmed}
+                  onChange={setConfirmed}
+                  disabled={busy}
+                  invalid={showProblems}
+                />
+              </View>
+
               <View style={{ height: spacing.md }} />
             </ScrollView>
           )}
@@ -587,18 +898,29 @@ export function BooklistReviewModal({
               Same pair as EditBooklistModal, so the two screens behave
               alike. */}
           <View style={[styles.actions, isMobile && styles.actionsMobile]}>
+            {/* Hidden for a guest. "Save as Draft" promises a row in
+                book_requests kept for later, and there is nowhere to
+                keep it without an account — offering it would be a
+                button that silently means something else. */}
+            {Boolean(userId) && (
             <Pressable
-              onPress={() => handleSave(false)}
-              disabled={!canSubmit}
+              onPress={() => attemptSave(false)}
+              // Disabled only while something is actually in flight.
+              // Muted-but-pressable otherwise, so a press that cannot go
+              // through says why instead of being swallowed.
+              disabled={busy}
               style={({ pressed }) => [
                 styles.btn,
                 styles.btnGhost,
                 !canSubmit && styles.btnGhostDisabled,
-                pressed && canSubmit && styles.pressed,
+                pressed && styles.pressed,
               ]}
               accessibilityRole="button"
+              accessibilityState={{ disabled: busy }}
               accessibilityLabel="Save as a draft"
-              accessibilityHint="Keeps the list private so you can finish it later."
+              accessibilityHint={
+                blocker ? blocker.message : 'Keeps the list private so you can finish it later.'
+              }
             >
               {pending === 'draft' ? (
                 <View style={styles.busy}>
@@ -611,17 +933,30 @@ export function BooklistReviewModal({
                 </Text>
               )}
             </Pressable>
+            )}
             <Pressable
-              onPress={() => handleSave(true)}
-              disabled={!canSubmit}
+              onPress={() => attemptSave(true)}
+              // The one that was reported as dead. It carried
+              // disabled={!canSubmit}, and canSubmit needs the accuracy
+              // tick — a box that sits below the fold on a long list. So
+              // the first press of a finished booklist hit a disabled
+              // control and produced nothing at all. It is pressable now
+              // whatever the state; attemptSave decides what happens.
+              disabled={busy}
               style={({ pressed }) => [
                 styles.btn,
                 styles.btnPrimary,
-                !canSubmit && styles.btnDisabled,
-                pressed && canSubmit && styles.pressed,
+                !canSubmit && styles.btnMuted,
+                pressed && styles.pressed,
               ]}
               accessibilityRole="button"
-              accessibilityLabel="Send this booklist to vendors for quotes"
+              accessibilityState={{ disabled: busy }}
+              accessibilityLabel={
+                userId
+                  ? 'Send this booklist to vendors for quotes'
+                  : 'Sign in to send this booklist to vendors'
+              }
+              accessibilityHint={blocker?.message}
             >
               {pending === 'publish' ? (
                 <View style={styles.busy}>
@@ -630,7 +965,11 @@ export function BooklistReviewModal({
                 </View>
               ) : (
                 <Text style={styles.btnPrimaryText} numberOfLines={1}>
-                  {photoOnly ? 'Send Photo to Vendors' : `Send to Vendors (${selected.length})`}
+                  {!userId
+                    ? 'Sign in to Send'
+                    : photoOnly
+                    ? 'Send Photo to Vendors'
+                    : `Send to Vendors (${selected.length})`}
                 </Text>
               )}
             </Pressable>
@@ -770,7 +1109,22 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     marginBottom: spacing.md,
   },
-  noticeText: { flex: 1, fontSize: font.sm, color: colors.warning, lineHeight: 18 },
+  noticeBody: { flex: 1, gap: 6 },
+  noticeText: { fontSize: font.sm, color: colors.warning, lineHeight: 18 },
+  retry: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 5,
+    paddingVertical: 8,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    minHeight: 36,
+  },
+  retryText: { fontSize: font.sm, fontWeight: '700', color: colors.navy },
   errorBox: {
     flexDirection: 'row',
     gap: spacing.sm,
@@ -782,6 +1136,8 @@ const styles = StyleSheet.create({
   },
   errorText: { flex: 1, fontSize: font.sm, color: colors.danger, lineHeight: 18 },
 
+  confirmBlock: { gap: spacing.sm, marginTop: spacing.md },
+  confirmHeading: { fontSize: font.sm, fontWeight: '800', color: colors.text },
   actions: {
     flexDirection: 'row',
     gap: spacing.md,
@@ -804,6 +1160,15 @@ const styles = StyleSheet.create({
   btnPrimary: { flex: 1, backgroundColor: colors.orange },
   btnPrimaryText: { color: colors.onNavy, fontWeight: '700', fontSize: font.md },
   btnDisabled: { backgroundColor: colors.borderStrong },
+  /**
+   * Not-yet, rather than dead.
+   *
+   * The old disabled style was a flat grey — the universal sign for "do
+   * not bother pressing this", on a button that was in fact the way
+   * forward. Keeping the brand colour at reduced opacity says the action
+   * is real and something is outstanding, which is exactly true.
+   */
+  btnMuted: { opacity: 0.55 },
   busy: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   pressed: { opacity: 0.85 },
 });

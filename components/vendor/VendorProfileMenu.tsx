@@ -3,6 +3,7 @@ import { View, Text, Pressable, Modal, ScrollView, StyleSheet } from 'react-nati
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { supabase } from '../../utils/supabase';
+import { getSessionUser } from '../../lib/loadState';
 import type { Vendor } from '../../types/db';
 import { colors, spacing, radius, font, shadow } from '../../theme';
 import { useLayout } from '../../hooks/useLayout';
@@ -96,9 +97,15 @@ export function VendorProfileMenu({ visible, vendor, onClose }: Props) {
   useEffect(() => {
     if (!visible) return;
     let active = true;
-    supabase.auth.getUser().then(({ data }) => {
-      if (active) setEmail(data.user?.email ?? '');
-    });
+    // getSessionUser(), not getUser(): the cached session, with no
+    // round trip and no AuthSessionMissingError when there is none.
+    getSessionUser()
+      .then((user) => {
+        if (active) setEmail(user?.email ?? '');
+      })
+      .catch(() => {
+        if (active) setEmail('');
+      });
     return () => {
       active = false;
     };

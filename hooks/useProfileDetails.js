@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '../utils/supabase';
+import { getSessionUser, subscribeToAuthReloads } from '../lib/loadState';
 
 /**
  * Everything the profile dropdown shows, for either role.
@@ -44,17 +45,44 @@ export function useProfileDetails({ enabled = true } = {}) {
   const [state, setState] = useState(EMPTY);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  /**
+   * Generation guard. Opening the menu, signing out and signing back in
+   * can leave two loads in flight; without this the slower one wins and
+   * writes the wrong person's details into the card.
+   */
+  const runId = useRef(0);
+  const alive = useRef(true);
 
   const load = useCallback(async () => {
+    const run = ++runId.current;
+    const current = () => alive.current && runId.current === run;
+
     setLoading(true);
     setError(null);
     try {
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
-      if (userError) throw userError;
+      // getSessionUser(), NOT supabase.auth.getUser().
+      //
+      // This one line was the "Auth session missing!" badge in the
+      // profile menu. getUser() does not answer "nobody is signed in"
+      // with { user: null } — it answers with an AuthSessionMissingError
+      // whose message is exactly that string. The `if (!user)` branch
+      // below was therefore unreachable: every signed-out open of this
+      // menu went through `throw userError` into setError, and the card
+      // rendered the raw message with a Retry button that could only
+      // ever produce the same error again.
+      //
+      // Nobody saw it while the app bounced guests to /auth/login. Guest
+      // browsing is what made a signed-out header reachable, and this
+      // was waiting behind it.
+      //
+      // getSession() reads the cached session and reports no session as
+      // null, which is what being signed out actually is.
+      const user = await getSessionUser();
+      if (!current()) return;
       if (!user) {
+        // A clean signed-out state, not a failure. No error is set, so
+        // the menu has nothing to show and the caller renders the guest
+        // path instead.
         setState(EMPTY);
         return;
       }
@@ -109,16 +137,62 @@ export function useProfileDetails({ enabled = true } = {}) {
         counts.pendingQuotes = quotes ?? 0;
       }
 
+      if (!current()) return;
       setState({ user, profile: profile ?? null, vendor, counts });
     } catch (e) {
+      if (!current()) return;
+      // The profile is gone with the session; leaving the last person's
+      // name and counts on screen under an error is worse than an empty
+      // card, and on a shared device it is a leak.
+      setState(EMPTY);
       setError(e);
     } finally {
-      setLoading(false);
+      if (current()) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
     if (enabled) load();
+  }, [enabled, load]);
+
+  /**
+   * Wipe on sign-out, immediately and without a query.
+   *
+   * A signed-out session leaves nothing to show, and waiting for the
+   * next load() to discover that means a frame — or a whole closed
+   * menu's worth of time — where the previous user's name, email and
+   * counts are still mounted. Cheap to do, and the only thing that makes
+   * "session null ⇒ user and profile null" true rather than eventual.
+   */
+  useEffect(() => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event) => {
+      if (event !== 'SIGNED_OUT') return;
+      // Invalidates any load still in flight, so a response that arrives
+      // after the sign-out cannot repopulate the card.
+      runId.current++;
+      setState(EMPTY);
+      setError(null);
+      setLoading(false);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // Anything other than a sign-out that changes who is signed in — a
+  // sign-in from the inline sheet, a profile update — refetches.
+  useEffect(() => {
+    if (!enabled) return;
+    return subscribeToAuthReloads(() => {
+      void load();
+    });
   }, [enabled, load]);
 
   const { user, profile, vendor, counts } = state;
@@ -128,6 +202,12 @@ export function useProfileDetails({ enabled = true } = {}) {
     loading,
     error,
     refresh: load,
+    /**
+     * No session. Distinct from `error`: nothing went wrong, there is
+     * simply nobody to show. The caller renders a sign-in path rather
+     * than a broken profile card.
+     */
+    signedOut: !loading && !error && user === null,
     user,
     profile,
     vendor,
