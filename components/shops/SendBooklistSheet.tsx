@@ -59,7 +59,7 @@ export function SendBooklistSheet({
 
           <View style={styles.head}>
             <View style={styles.headText}>
-              <Text style={styles.title}>Send a booklist</Text>
+              <Text style={styles.title}>Send a Booklist</Text>
               <Text style={styles.subtitle} numberOfLines={2}>
                 Pick one to send to {shopName}. Only they will see it.
               </Text>

@@ -15,6 +15,7 @@ import { ActiveBooklists } from '../../components/dashboard/ActiveBooklists';
 import { CreateBooklistModal } from '../../components/CreateBooklistModal';
 import { BooklistReviewModal } from '../../components/booklists/BooklistReviewModal';
 import { CreateBooklist } from '../../components/dashboard/CreateBooklist';
+import { HeroBanner } from '../../components/dashboard/HeroBanner';
 import { PendingQuotes } from '../../components/dashboard/PendingQuotes';
 import { FeaturedShops } from '../../components/dashboard/FeaturedShops';
 import { OrderSummary } from '../../components/dashboard/OrderSummary';
@@ -27,7 +28,7 @@ import { SignInPrompt } from '../../components/auth/SignInPrompt';
 import { getSessionUserId, subscribeToAuthReloads } from '../../lib/loadState';
 import { loadGuestDraft, draftHasContent } from '../../lib/guestDraft';
 import { MANUAL_BOOKLIST_ROUTE } from '../../hooks/useCreateBooklist';
-import { colors, spacing, radius, font } from '../../theme';
+import { colors, spacing, radius, font, typography } from '../../theme';
 import { Footer } from '../../components/layout/Footer';
 
 /**
@@ -208,8 +209,20 @@ export default function DashboardScreen() {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />}
           showsVerticalScrollIndicator={false}
         >
+          {/* Above the banners on purpose. An error or a success note is
+              about one thing that just happened; the hero is what the
+              page IS, and a page whose first line changes depending on
+              whether the last upload worked has no first line. */}
+          <HeroBanner
+            onCreate={handleCreateNew}
+            onBrowse={() => router.push('/shops')}
+          />
+
           <View style={styles.heading}>
-            <Text style={styles.h1}>Booklist Hub</Text>
+            {/* The hero already says what this page is for, so the old
+                "Booklist Hub" title underneath it was the same statement
+                twice. What is left is the one thing the hero cannot
+                carry, because it is different for every person. */}
             <Text style={styles.h2}>Welcome back, {displayName}</Text>
           </View>
 
@@ -378,9 +391,13 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
   },
 
-  heading: { marginBottom: spacing.lg },
-  h1: { fontSize: 22, fontWeight: '800', color: colors.text },
-  h2: { fontSize: font.md, color: colors.textMuted, marginTop: 2 },
+  // marginTop as well now: the hero sits directly above this, and
+  // scrollContent has no gap of its own.
+  heading: { marginTop: spacing.lg, marginBottom: spacing.lg },
+  // h1 went with the "Booklist Hub" title the hero replaced.
+  // The one line on the page that is different for every person.
+  // 15/500/#334155 — a secondary heading, not body copy.
+  h2: { ...typography.heading },
 
   columns: { flexDirection: 'row', gap: spacing.lg, alignItems: 'flex-start', width: '100%' },
   mainCol: { flex: 1.55, minWidth: 300 },

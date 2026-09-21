@@ -362,7 +362,7 @@ export default function BooklistsScreen() {
                 actions={cardActions}
               />
               <Section
-                title="Drafts & pending"
+                title="Drafts & Pending"
                 caption="Drafts you are still writing, and lists sent out with no quotes back yet"
                 icon="time-outline"
                 booklists={filter(sections.draft)}

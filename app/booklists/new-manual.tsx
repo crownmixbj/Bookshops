@@ -445,7 +445,7 @@ export default function NewBooklistScreen() {
   return (
     <BuyerPage
       eyebrow={isDirect ? 'Booklist for one shop' : 'Booklist'}
-      title="Create a new booklist"
+      title="Create a New Booklist"
       subtitle={
         isDirect
           ? `Snap the paper list or type it out. It goes straight to ${
@@ -500,7 +500,7 @@ export default function NewBooklistScreen() {
         </View>
       )}
 
-      <Panel title="Photo of the list">
+      <Panel title="Photo of the List">
         <Text style={styles.panelHint}>
           Fastest way in: photograph the sheet the school sent home. A shop can read and quote
           straight from the picture, so you do not have to type anything below.
@@ -560,7 +560,7 @@ export default function NewBooklistScreen() {
         )}
       </Panel>
 
-      <Panel title="School details">
+      <Panel title="School Details">
         <Field
           label="School"
           placeholder="e.g. Ise Oluwa School"
@@ -584,7 +584,7 @@ export default function NewBooklistScreen() {
       </Panel>
 
       <Panel
-        title="Books on this list"
+        title="Books on This List"
         right={
           <Text style={styles.count}>
             {filled.length} item{filled.length === 1 ? '' : 's'}
@@ -628,7 +628,7 @@ export default function NewBooklistScreen() {
       <Panel>
         {/* ---- review & confirm, immediately above the button ---- */}
         <View style={styles.confirmBlock}>
-          <Text style={styles.confirmHeading}>Review &amp; confirm</Text>
+          <Text style={styles.confirmHeading}>Review &amp; Confirm</Text>
           <BooklistSummary
             itemCount={filled.length}
             copyCount={filled.reduce((n, l) => n + (Number(l.quantity) || 1), 0)}

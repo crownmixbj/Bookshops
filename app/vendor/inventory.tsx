@@ -110,7 +110,7 @@ export default function VendorInventoryScreen() {
         </View>
       )}
 
-      <Panel title="Listed items">
+      <Panel title="Listed Items">
         {loading ? (
           <View style={{ gap: spacing.sm }}>
             {[0, 1, 2].map((i) => (

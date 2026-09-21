@@ -1,6 +1,6 @@
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, spacing, radius, font, shadow, formatNaira } from '../../theme';
+import { colors, spacing, radius, font, shadow, typography, formatNaira } from '../../theme';
 import { useLayout } from '../../hooks/useLayout';
 
 /**
@@ -100,15 +100,15 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   panel: { gap: spacing.sm },
-  title: { fontSize: font.lg, fontWeight: '700', color: colors.text, marginBottom: spacing.sm },
+  title: { ...typography.cardTitle, marginBottom: spacing.sm },
 
   line: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  lineLabel: { fontSize: font.md, color: colors.textMuted },
-  lineValue: { fontSize: font.md, color: colors.text, fontWeight: '600' },
-  lineMuted: { fontSize: font.sm, color: colors.textFaint },
+  lineLabel: { ...typography.body },
+  lineValue: { ...typography.bodyStrong },
+  lineMuted: { ...typography.caption },
 
   rule: { height: 1, backgroundColor: colors.border, marginVertical: spacing.sm },
-  totalLabel: { fontSize: font.lg, fontWeight: '700', color: colors.text },
+  totalLabel: { ...typography.heading, fontWeight: '600', color: colors.text },
   totalValue: { fontSize: font.xxl, fontWeight: '800', color: colors.navy },
 
   pay: {
@@ -125,9 +125,9 @@ const styles = StyleSheet.create({
   },
   payPressed: { backgroundColor: colors.orangeDark },
   payDisabled: { backgroundColor: colors.borderStrong },
-  payText: { color: colors.onNavy, fontWeight: '700', fontSize: font.md },
+  payText: { ...typography.bodyStrong, fontWeight: '700', color: colors.onNavy },
 
-  note: { fontSize: font.xs, color: colors.textFaint, marginTop: spacing.sm, lineHeight: 15 },
+  note: { ...typography.caption, marginTop: spacing.sm },
 
   dock: {
     flexDirection: 'row',
@@ -142,7 +142,7 @@ const styles = StyleSheet.create({
     ...shadow.raised,
   },
   dockText: { flex: 1 },
-  dockLabel: { fontSize: font.sm, color: colors.textMuted },
+  dockLabel: { ...typography.caption, color: colors.textMuted },
   dockTotal: { fontSize: font.xl, fontWeight: '800', color: colors.navy },
   dockBtn: { flexShrink: 1 },
 });

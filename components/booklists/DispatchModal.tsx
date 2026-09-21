@@ -70,7 +70,7 @@ export function DispatchModal({ schoolName, busy = false, onCancel, onConfirm }:
         <View style={[styles.card, isMobile && styles.cardMobile]}>
           <View style={styles.head}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.title}>Send this booklist</Text>
+              <Text style={styles.title}>Send This Booklist</Text>
               <Text style={styles.subtitle} numberOfLines={1}>
                 {schoolName || 'Your booklist'}
               </Text>
@@ -92,7 +92,7 @@ export function DispatchModal({ schoolName, busy = false, onCancel, onConfirm }:
 
             <Option
               icon="storefront-outline"
-              title="Direct to one shop"
+              title="Direct to One Shop"
               caption="Only the shop you pick will see this list. Nobody else can quote it."
               selected={mode === 'direct'}
               onPress={() => setMode('direct')}

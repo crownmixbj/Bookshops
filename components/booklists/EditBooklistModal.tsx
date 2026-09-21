@@ -209,7 +209,7 @@ export function EditBooklistModal({ booklist, onClose, onSaved }: Props) {
         <View style={[styles.card, isMobile && styles.cardMobile]}>
           <View style={styles.head}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.title}>Edit booklist</Text>
+              <Text style={styles.title}>Edit Booklist</Text>
               <Text style={styles.subtitle} numberOfLines={1}>
                 {isDraft ? 'Draft — no vendor has seen this yet' : 'Already sent to vendors'}
               </Text>

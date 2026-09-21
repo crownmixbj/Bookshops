@@ -1,6 +1,6 @@
 import { View, Text, TextInput, Pressable, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, spacing, radius, font, shadow } from '../../theme';
+import { colors, spacing, radius, font, shadow, typography } from '../../theme';
 import { useLayout } from '../../hooks/useLayout';
 
 /**
@@ -204,9 +204,15 @@ const styles = StyleSheet.create({
 
   ribbon: {
     backgroundColor: colors.navy,
-    paddingVertical: spacing.sm,
+    // spacing.md, up from spacing.sm. At 8px the line sat hard against
+    // the bar above and the page below, which is what made a one-line
+    // welcome read as cramped rather than calm.
+    paddingVertical: spacing.md,
     paddingHorizontal: spacing.lg,
     alignItems: 'center',
   },
-  ribbonText: { color: colors.onNavy, fontSize: font.sm, fontWeight: '600' },
+  // 13px / 500 / +0.3 tracking. The tracking is doing real work here:
+  // this is a single wide line of near-white on navy, and letterforms
+  // set tight on a dark ground read as heavier than they are.
+  ribbonText: { ...typography.micro, color: colors.onNavy },
 });

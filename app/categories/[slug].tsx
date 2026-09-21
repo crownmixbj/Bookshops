@@ -104,7 +104,7 @@ export default function CategoryScreen() {
           </View>
         </Panel>
       ) : (
-        <Panel title="Available from shops near you">
+        <Panel title="Available from Shops Near You">
           <View>
             {products.map((product, i) => (
               <ProductRow

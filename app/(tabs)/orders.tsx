@@ -191,7 +191,7 @@ export default function OrdersScreen() {
           ) : (
             <>
               <Section
-                title="In progress"
+                title="In Progress"
                 caption="Being prepared, or on the way to you"
                 icon="navigate-outline"
                 orders={filter(sections.active)}

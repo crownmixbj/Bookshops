@@ -1,6 +1,6 @@
 import { View, Text, Pressable, Modal, Platform, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, spacing, radius, font, shadow } from '../../theme';
+import { colors, spacing, radius, shadow, typography } from '../../theme';
 import { useLayout } from '../../hooks/useLayout';
 
 export type CreateSource = 'camera' | 'library' | 'manual';
@@ -72,7 +72,7 @@ export function CreateBooklistSheet({
 
         <View style={[styles.sheet, isMobile ? styles.sheetMobile : styles.sheetDesktop]}>
           <View style={styles.head}>
-            <Text style={styles.title}>Create a new booklist</Text>
+            <Text style={styles.title}>Create a New Booklist</Text>
             <Pressable
               onPress={onClose}
               hitSlop={8}
@@ -127,7 +127,7 @@ const styles = StyleSheet.create({
   },
 
   head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.md },
-  title: { fontSize: font.lg, fontWeight: '800', color: colors.text },
+  title: { ...typography.cardTitle },
   pressed: { opacity: 0.6 },
 
   list: { gap: spacing.sm },
@@ -142,8 +142,8 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   optionText: { flex: 1, minWidth: 0 },
-  optionLabel: { fontSize: font.md, fontWeight: '700', color: colors.text },
-  optionHint: { fontSize: font.sm, color: colors.textMuted, marginTop: 1 },
+  optionLabel: { ...typography.bodyStrong },
+  optionHint: { ...typography.caption, marginTop: 1 },
 
-  note: { fontSize: font.xs, color: colors.textFaint, marginTop: spacing.md, lineHeight: 16 },
+  note: { ...typography.caption, marginTop: spacing.md },
 });

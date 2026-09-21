@@ -1,6 +1,6 @@
 import { View, Text, Pressable, StyleSheet, Modal } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, spacing, radius, font, shadow } from '../../theme';
+import { colors, spacing, radius, shadow, typography } from '../../theme';
 import { useLayout } from '../../hooks/useLayout';
 
 /**
@@ -145,7 +145,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.lg,
     minHeight: 24,
   },
-  headerText: { fontSize: font.lg, fontWeight: '700', color: colors.text },
+  headerText: { ...typography.cardTitle },
 
   navList: { gap: 4 },
   navRow: {
@@ -159,7 +159,7 @@ const styles = StyleSheet.create({
   navRowCollapsed: { justifyContent: 'center', paddingHorizontal: 0 },
   navRowActive: { backgroundColor: colors.navy },
   navRowPressed: { backgroundColor: colors.surfaceMuted },
-  navLabel: { fontSize: font.md, color: colors.text, fontWeight: '500' },
+  navLabel: { ...typography.heading, color: colors.text },
   navLabelActive: { color: colors.onNavy, fontWeight: '700' },
 
   scrim: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(15,30,61,0.45)' },

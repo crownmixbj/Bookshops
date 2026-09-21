@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Card } from './Card';
 import { CategoryCard } from './CategoryCard';
 import { useCategories } from '../../hooks/useCategories';
-import { colors, spacing, radius, font } from '../../theme';
+import { colors, spacing, radius, font, typography } from '../../theme';
 import { useLayout } from '../../hooks/useLayout';
 
 export function FeaturedShops({ shop, onViewShop, onSelectCategory }) {
@@ -90,9 +90,9 @@ const styles = StyleSheet.create({
   },
   shopThumbText: { color: colors.onNavy, fontWeight: '800', fontSize: font.xl },
   shopText: { flex: 1 },
-  shopName: { fontSize: font.md, fontWeight: '700', color: colors.text },
+  shopName: { ...typography.bodyStrong },
   shopMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
-  shopMeta: { fontSize: font.sm, color: colors.textMuted },
+  shopMeta: { ...typography.caption },
 
   viewBtn: {
     marginTop: spacing.md,
@@ -102,7 +102,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   viewBtnPressed: { backgroundColor: colors.orangeDark },
-  viewBtnText: { color: colors.onNavy, fontWeight: '700', fontSize: font.md },
+  viewBtnText: { ...typography.bodyStrong, fontWeight: '700', color: colors.onNavy },
 
   grid: {
     flexDirection: 'row',

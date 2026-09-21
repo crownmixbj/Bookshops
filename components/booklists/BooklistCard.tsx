@@ -677,7 +677,9 @@ const styles = StyleSheet.create({
   itemUnitPrice: { fontSize: font.xs, color: colors.textMuted, marginTop: 1 },
   itemQtyWarn: { fontSize: font.xs, color: colors.warning, marginTop: 1 },
 
-  lightbox: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(9,17,34,0.92)' },
+  // ...absoluteFill, matching the scrims elsewhere in the app.
+  // absoluteFillObject is not in this version's StyleSheet types.
+  lightbox: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(9,17,34,0.92)' },
   lightboxCentre: {
     flex: 1,
     alignItems: 'center',

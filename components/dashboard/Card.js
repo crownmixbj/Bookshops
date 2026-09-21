@@ -1,5 +1,5 @@
 import { View, Text, StyleSheet } from 'react-native';
-import { colors, spacing, radius, font, shadow } from '../../theme';
+import { colors, spacing, radius, font, shadow, typography } from '../../theme';
 
 /** Shared white panel with an optional title row. */
 export function Card({ title, right, children, style, bodyStyle }) {
@@ -51,7 +51,10 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.md,
     gap: spacing.sm,
   },
-  title: { fontSize: font.lg, fontWeight: '700', color: colors.text },
+  // The one place a section title is defined. Every Card on the
+  // dashboard reads it, so the scale is enforced by construction
+  // rather than by remembering to match it.
+  title: { ...typography.cardTitle },
   body: { paddingHorizontal: spacing.lg, paddingBottom: spacing.lg },
 
   pill: {

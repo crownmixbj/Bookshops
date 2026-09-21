@@ -494,7 +494,7 @@ export function guessCategory(title: string): ItemCategory {
  *
  * PUBLISHED_STATUS is deliberately the SINGULAR 'pending_quote'. It is
  * not a typo and it is not free to change: vendor_request_queue() filters
- * `status in ('pending_quote','quoted')`, and SendBooklistModal,
+ * `status in ('pending_quote','quoted')`, and SendBooklistSheet,
  * useProfileDetails and the admin screens all match the same string. A
  * plural value here compiles, saves, and silently hides every published
  * list from every vendor.

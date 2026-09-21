@@ -63,7 +63,7 @@ export function CreateSourceSheet({ visible, onClose, onPick }: Props) {
 
           <View style={styles.head}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.title}>New booklist</Text>
+              <Text style={styles.title}>New Booklist</Text>
               <Text style={styles.subtitle}>How would you like to start?</Text>
             </View>
             <Pressable onPress={onClose} hitSlop={8} accessibilityLabel="Close">

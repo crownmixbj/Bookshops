@@ -69,13 +69,13 @@ export function SupportMenu({ visible, onClose, onOpenChat }) {
 
           <Option
             icon="call-outline"
-            title="Call support"
+            title="Call Support"
             detail={SUPPORT.phoneDisplay}
             onPress={() => open(SUPPORT_TEL)}
           />
           <Option
             icon="mail-outline"
-            title="Email us"
+            title="Email Us"
             detail={SUPPORT.email}
             onPress={() =>
               open(supportMailto({ subject: 'LOCI support request' }))
@@ -83,7 +83,7 @@ export function SupportMenu({ visible, onClose, onOpenChat }) {
           />
           <Option
             icon="chatbubble-ellipses-outline"
-            title="Live chat"
+            title="Live Chat"
             detail="Chat with the team in the app"
             accent
             onPress={() => {

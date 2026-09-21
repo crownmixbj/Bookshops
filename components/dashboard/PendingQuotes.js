@@ -1,7 +1,7 @@
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Card } from './Card';
-import { colors, spacing, radius, font, formatNaira } from '../../theme';
+import { colors, spacing, radius, font, typography, formatNaira } from '../../theme';
 
 /**
  * A shop's rating, or a plain statement that it has none.
@@ -99,7 +99,7 @@ export function PendingQuotes({ quotes, onSelectQuote, loading }) {
 }
 
 const styles = StyleSheet.create({
-  sub: { fontSize: font.sm, color: colors.textMuted, marginBottom: spacing.md },
+  sub: { ...typography.body, marginBottom: spacing.md },
   list: { gap: spacing.sm },
   row: {
     flexDirection: 'row',
@@ -124,11 +124,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   thumbText: { fontWeight: '800', color: colors.navy, fontSize: font.lg },
-  vendor: { fontSize: font.md, fontWeight: '700', color: colors.text },
+  vendor: { ...typography.bodyStrong },
   stars: { flexDirection: 'row', alignItems: 'center', gap: 2 },
-  ratingText: { fontSize: font.xs, color: colors.textMuted, marginLeft: 3, fontWeight: '600' },
-  noRating: { fontSize: font.xs, color: colors.textFaint },
-  price: { fontSize: font.md, fontWeight: '800', color: colors.text },
+  ratingText: { ...typography.caption, color: colors.textMuted, marginLeft: 3, fontWeight: '600' },
+  noRating: { ...typography.caption },
+  price: { ...typography.bodyStrong, fontWeight: '800' },
 
   empty: { paddingVertical: spacing.lg, alignItems: 'center', gap: spacing.sm },
   emptyIcon: {
@@ -141,14 +141,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
-  emptyTitle: { fontSize: font.md, fontWeight: '700', color: colors.text },
-  emptyText: {
-    fontSize: font.sm,
-    color: colors.textMuted,
-    textAlign: 'center',
-    lineHeight: 19,
-    maxWidth: 320,
-  },
+  // Matches ActiveBooklists exactly: the two empty states sit one
+  // above the other in the same column, and any difference between
+  // them reads as a mistake rather than a distinction.
+  emptyTitle: { ...typography.emptyTitle },
+  emptyText: { ...typography.body, textAlign: 'center', maxWidth: 320 },
 
   skeleton: { height: 62, borderRadius: radius.md, backgroundColor: colors.surfaceMuted },
 });

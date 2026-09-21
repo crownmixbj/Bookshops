@@ -112,7 +112,7 @@ export function VendorDetailDrawer({ vendor, onClose, onApprove, onSuspend, onRe
               </View>
             )}
 
-            <Section title="Shop profile">
+            <Section title="Shop Profile">
               <Row label="City" value={vendor.city} />
               <Row label="Address" value={vendor.address} />
               <Row
@@ -130,7 +130,7 @@ export function VendorDetailDrawer({ vendor, onClose, onApprove, onSuspend, onRe
               <Row label="Shop email" value={vendor.email} />
             </Section>
 
-            <Section title="Payout account">
+            <Section title="Payout Account">
               {loading ? (
                 <>
                   <Skeleton width="80%" height={14} />

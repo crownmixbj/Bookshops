@@ -1,6 +1,6 @@
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, spacing, radius, font, shadow } from '../../theme';
+import { colors, spacing, radius, shadow, typography } from '../../theme';
 
 /**
  * The one way to start a booklist from the hub.
@@ -56,6 +56,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  captureText: { color: colors.onNavy, fontSize: font.lg, fontWeight: '700' },
-  captureHint: { color: 'rgba(255,255,255,0.75)', fontSize: font.sm },
+  captureText: { ...typography.heading, fontWeight: '600', color: colors.onNavy },
+  captureHint: { ...typography.caption, color: 'rgba(255,255,255,0.78)' },
 });

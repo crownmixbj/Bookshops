@@ -376,7 +376,7 @@ export default function CheckoutScreen() {
       <View style={[styles.columns, isMobile && styles.columnsStacked]}>
         {/* ---------------- Delivery ---------------- */}
         <View style={[styles.column, !isMobile && styles.columnWide]}>
-          <Panel title="Delivery information">
+          <Panel title="Delivery Information">
             <View style={styles.form}>
               <FormField
                 label="Full name"

@@ -3,7 +3,7 @@ import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Card, Pill } from './Card';
 import { LINE_PRICE_LABEL, linePriceState } from '../../lib/booklistPricing';
-import { colors, spacing, radius, font, formatNaira } from '../../theme';
+import { colors, spacing, radius, font, typography, formatNaira } from '../../theme';
 
 function Checkbox({ checked, onToggle, label }) {
   return (
@@ -349,7 +349,7 @@ const styles = StyleSheet.create({
     borderTopColor: colors.border,
   },
   openRowPressed: { opacity: 0.6 },
-  openText: { fontSize: font.sm, fontWeight: '700', color: colors.navy },
+  openText: { ...typography.micro, fontWeight: '700', color: colors.navy },
 
   groupHeadPressed: { backgroundColor: colors.surfaceMuted },
 
@@ -377,8 +377,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   vendorThumbText: { color: colors.onNavy, fontWeight: '800', fontSize: font.lg },
-  vendorName: { fontSize: font.md, fontWeight: '700', color: colors.text },
-  vendorMeta: { fontSize: font.sm, color: colors.textMuted, marginTop: 1 },
+  vendorName: { ...typography.bodyStrong },
+  vendorMeta: { ...typography.caption, marginTop: 1 },
 
   itemList: { borderTopWidth: 1, borderTopColor: colors.border },
   itemRow: {
@@ -401,10 +401,10 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
   qtyText: { fontSize: font.xs, fontWeight: '800', color: colors.navy },
-  itemTitle: { flex: 1, fontSize: font.md, color: colors.text },
-  itemAuthor: { fontSize: font.sm, color: colors.textMuted, marginTop: 1 },
+  itemTitle: { ...typography.body, flex: 1, color: colors.text },
+  itemAuthor: { ...typography.caption, marginTop: 1 },
   itemRight: { alignItems: 'flex-end', gap: 3 },
-  itemPrice: { fontSize: font.md, fontWeight: '700', color: colors.text },
+  itemPrice: { ...typography.bodyStrong },
   itemPriceMuted: { fontSize: font.sm, fontWeight: '500', color: colors.textFaint },
   itemPriceOut: { fontSize: font.sm, fontWeight: '600', color: colors.textMuted },
   itemUnitPrice: { fontSize: font.xs, color: colors.textMuted },
@@ -433,7 +433,11 @@ const styles = StyleSheet.create({
   },
 
   empty: { alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.xl },
-  emptyTitle: { fontSize: font.md, fontWeight: '800', color: colors.text, textAlign: 'center' },
+  // 15/600/#1A2536. It was 14/800 — the same size as the grey line
+  // under it, separated only by weight, which at 14px is a thin
+  // signal. A step up in size does the separating now, so the
+  // weight can come back down to something that is not shouting.
+  emptyTitle: { ...typography.emptyTitle, textAlign: 'center' },
 
   draft: {
     borderWidth: 1,
@@ -453,9 +457,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  draftTitle: { fontSize: font.md, fontWeight: '700', color: colors.text },
-  draftMeta: { fontSize: font.sm, color: colors.textMuted, marginTop: 1 },
-  draftLine: { fontSize: font.sm, color: colors.textMuted, paddingLeft: 46 },
+  draftTitle: { ...typography.bodyStrong },
+  draftMeta: { ...typography.caption, marginTop: 1 },
+  draftLine: { ...typography.caption, paddingLeft: 46 },
   draftFoot: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -480,14 +484,8 @@ const styles = StyleSheet.create({
     minHeight: 44,
   },
   emptyActionPressed: { opacity: 0.6 },
-  emptyActionText: { fontSize: font.sm, fontWeight: '700', color: colors.navy },
-  emptyText: {
-    fontSize: font.md,
-    color: colors.textMuted,
-    textAlign: 'center',
-    maxWidth: 300,
-    lineHeight: 20,
-  },
+  emptyActionText: { ...typography.micro, fontWeight: '700', color: colors.navy },
+  emptyText: { ...typography.body, textAlign: 'center', maxWidth: 300 },
 
   skeletonWrap: { gap: spacing.sm },
   skeletonRow: {

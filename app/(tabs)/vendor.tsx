@@ -181,7 +181,7 @@ export default function VendorDashboardScreen() {
       )}
 
       {!loading && counts.all === 0 && unanswered === 0 && (
-        <Panel title="Getting started">
+        <Panel title="Getting Started">
           <Text style={styles.startText}>
             No requests have reached you yet. Two things bring them in: an approved, verified
             shop, and a city on your profile so buyers nearby can find you.

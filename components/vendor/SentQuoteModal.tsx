@@ -73,7 +73,7 @@ export function SentQuoteModal({ quote, onClose }: Props) {
         <View style={[styles.card, isMobile && styles.cardMobile]}>
           <View style={styles.head}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.title}>Quote you sent</Text>
+              <Text style={styles.title}>Quote You Sent</Text>
               <Text style={styles.subtitle} numberOfLines={1}>
                 {[quote?.customer_name, quote?.school_name, quote?.class_level]
                   .filter(Boolean)

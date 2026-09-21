@@ -278,7 +278,7 @@ export default function SettingsScreen() {
                 {/* ---- delivery -------------------------------- */}
                 {!isVendor && (
                   <Section
-                    title="Default delivery address"
+                    title="Default Delivery Address"
                     caption="Used to prefill checkout"
                     icon="location-outline"
                     footer={<SaveButton onPress={savePersonal} state={personalState} />}
@@ -332,7 +332,7 @@ export default function SettingsScreen() {
                 {/* ---- vendor ---------------------------------- */}
                 {isVendor && (
                   <Section
-                    title="Shop details"
+                    title="Shop Details"
                     caption="What buyers see on your shop card"
                     icon="storefront-outline"
                     footer={<SaveButton onPress={saveVendor} state={vendorState} />}
@@ -475,7 +475,7 @@ export default function SettingsScreen() {
 
                 {/* ---- app preferences ------------------------- */}
                 <Section
-                  title="App preferences"
+                  title="App Preferences"
                   caption="Currency and appearance"
                   icon="options-outline"
                 >

@@ -111,7 +111,7 @@ export default function ShopDetailScreen() {
         </View>
       )}
 
-      <Panel title="About this shop">
+      <Panel title="About This Shop">
         <View style={styles.stats}>
           <Stat
             label="Rating"
@@ -149,7 +149,7 @@ export default function ShopDetailScreen() {
           empty state inviting them to do something they cannot. */}
       {!!userId && (
         <Panel
-          title="Quotes from this shop"
+          title="Quotes from This Shop"
           right={
             quotes.length > 0 ? (
               <Text style={styles.count}>

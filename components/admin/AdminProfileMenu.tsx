@@ -192,7 +192,7 @@ export function AdminProfileMenu({ visible, onClose }: Props) {
 
             <View style={styles.rule} />
 
-            <Text style={styles.sectionLabel}>Your recent actions</Text>
+            <Text style={styles.sectionLabel}>Your Recent Actions</Text>
             {loading ? (
               <View style={styles.loading}>
                 <ActivityIndicator size="small" color={colors.navy} />

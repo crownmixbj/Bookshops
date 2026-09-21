@@ -3,7 +3,7 @@ import { View, Text, Image, Pressable, Platform, StyleSheet } from 'react-native
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import type { Category } from '../../types/catalog';
-import { colors, spacing, radius, font, shadow } from '../../theme';
+import { colors, spacing, radius, shadow, typography } from '../../theme';
 
 /** Where a category tile goes. One place, so the tiles cannot drift from the route. */
 export function categoryHref(slug: string) {
@@ -133,7 +133,7 @@ const styles = StyleSheet.create({
   image: { width: '100%', height: '100%' },
   fallbackIcon: { opacity: 0.75 },
 
-  label: { fontSize: font.md, fontWeight: '700', color: colors.text },
-  sub: { fontSize: font.xs, color: colors.textFaint },
-  count: { fontSize: font.xs, fontWeight: '700', color: colors.textMuted, marginTop: 1 },
+  label: { ...typography.bodyStrong },
+  sub: { ...typography.caption },
+  count: { ...typography.caption, fontWeight: '600', color: colors.textMuted, marginTop: 1 },
 });

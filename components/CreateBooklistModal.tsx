@@ -113,7 +113,7 @@ export function CreateBooklistModal({
 
           <View style={styles.head}>
             <View style={styles.headText}>
-              <Text style={styles.title}>New booklist</Text>
+              <Text style={styles.title}>New Booklist</Text>
               <Text style={styles.subtitle}>How would you like to start?</Text>
             </View>
             <Pressable

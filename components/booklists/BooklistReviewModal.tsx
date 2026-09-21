@@ -621,7 +621,7 @@ export function BooklistReviewModal({
         <View style={[styles.card, isMobile && styles.cardMobile]}>
           <View style={styles.head}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.title}>Check your booklist</Text>
+              <Text style={styles.title}>Check Your Booklist</Text>
               <Text style={styles.subtitle}>
                 Fix anything we read wrong, and untick books you already own.
               </Text>
@@ -873,7 +873,7 @@ export function BooklistReviewModal({
                   confirmY.current = e.nativeEvent.layout.y;
                 }}
               >
-                <Text style={styles.confirmHeading}>Review &amp; confirm</Text>
+                <Text style={styles.confirmHeading}>Review &amp; Confirm</Text>
                 <BooklistSummary
                   itemCount={selected.length}
                   copyCount={selected.reduce((n, i) => n + (Number(i.quantity) || 1), 0)}
