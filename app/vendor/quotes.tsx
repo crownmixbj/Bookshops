@@ -85,6 +85,7 @@ export default function VendorQuotesScreen() {
     queue,
     selected,
     lines,
+    imagePath,
     totals,
     loading: queueLoading,
     loadingDetail,
@@ -228,6 +229,7 @@ export default function VendorQuotesScreen() {
             <QuoteEditor
               request={selected}
               lines={lines}
+              imagePath={imagePath}
               totals={totals}
               loading={loadingDetail}
               saving={busySaving}

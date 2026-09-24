@@ -13,10 +13,13 @@ import type { VendorQueueRow } from '../../types/db';
 import type { DraftLine } from '../../hooks/useVendorDashboard';
 import { colors, spacing, radius, font, formatNaira } from '../../theme';
 import { useLayout } from '../../hooks/useLayout';
+import { BooklistPhotoViewer } from './BooklistPhotoViewer';
 
 interface Props {
   request: VendorQueueRow;
   lines: DraftLine[];
+  /** Object path of the buyer's booklist photo in the private bucket. */
+  imagePath?: string | null;
   totals: {
     itemCount: number;
     unavailableCount: number;
@@ -124,6 +127,7 @@ function LineRow({
 export function QuoteEditor({
   request,
   lines,
+  imagePath,
   totals,
   loading,
   saving,
@@ -162,12 +166,24 @@ export function QuoteEditor({
       ) : lines.length === 0 ? (
         <View style={styles.loading}>
           <Text style={styles.emptyText}>
-            This booklist has no itemised lines yet, so there is nothing to price. The buyer
-            may have uploaded a photo without adding the items.
+            {imagePath
+              ? "This booklist has no itemised lines yet, so there is nothing to price. The buyer uploaded a photo instead — tap it to zoom in and read the list."
+              : 'This booklist has no itemised lines yet, and the buyer did not attach a photo, so there is nothing to price.'}
           </Text>
+          <BooklistPhotoViewer
+            imagePath={imagePath}
+            title={request.school_name}
+            variant="primary"
+          />
         </View>
       ) : (
         <>
+          <BooklistPhotoViewer
+            imagePath={imagePath}
+            title={request.school_name}
+            variant="reference"
+          />
+
           {!isMobile && (
             <View style={styles.headRow}>
               <Text style={[styles.th, styles.colTitle]}>Book Title</Text>

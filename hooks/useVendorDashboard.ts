@@ -68,6 +68,8 @@ export function useVendorDashboard() {
   const [queue, setQueue] = useState<VendorQueueRow[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [lines, setLines] = useState<DraftLine[]>([]);
+  /** The buyer's booklist photo for the open request, if they attached one. */
+  const [imagePath, setImagePath] = useState<string | null>(null);
   const [quoteId, setQuoteId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingDetail, setLoadingDetail] = useState(false);
@@ -139,16 +141,32 @@ export function useVendorDashboard() {
   const openRequest = useCallback(
     async (row: VendorQueueRow) => {
       setSelectedId(row.request_id);
+      setImagePath(null);
       setLoadingDetail(true);
       setNotice(null);
       setError(null);
       try {
-        const { data: items, error: itemsError } = await supabase
-          .from('book_request_items')
-          .select('id, request_id, title, category, quantity, unit_price, parsed, position, created_at, updated_at')
-          .eq('request_id', row.request_id)
-          .order('position', { ascending: true });
+        // The photo path is read alongside the lines. It is not on the
+        // queue RPC's row, and requests_select_visible already lets a
+        // vendor read any request that is in their queue.
+        const [{ data: items, error: itemsError }, { data: req, error: reqError }] =
+          await Promise.all([
+            supabase
+              .from('book_request_items')
+              .select('id, request_id, title, category, quantity, unit_price, parsed, position, created_at, updated_at')
+              .eq('request_id', row.request_id)
+              .order('position', { ascending: true }),
+            supabase
+              .from('book_requests')
+              .select('image_path')
+              .eq('id', row.request_id)
+              .maybeSingle(),
+          ]);
         if (itemsError) throw itemsError;
+        // Not fatal: without the path the editor behaves exactly as it
+        // did before the photo viewer existed.
+        if (reqError) console.warn('[vendor] booklist photo path not loaded:', reqError.message);
+        setImagePath(req?.image_path ?? null);
 
         let existing: QuoteItem[] = [];
         if (row.my_quote_id) {
@@ -324,6 +342,7 @@ export function useVendorDashboard() {
       if (selectedId === row.request_id) {
         setSelectedId(null);
         setLines([]);
+        setImagePath(null);
       }
       await loadQueue();
     },
@@ -358,6 +377,7 @@ export function useVendorDashboard() {
     queue,
     selected,
     lines,
+    imagePath,
     totals,
     loading,
     loadingDetail,
@@ -368,6 +388,7 @@ export function useVendorDashboard() {
     closeRequest: () => {
       setSelectedId(null);
       setLines([]);
+      setImagePath(null);
     },
     setLinePrice,
     setLineAvailable,
