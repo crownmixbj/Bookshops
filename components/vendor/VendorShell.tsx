@@ -33,7 +33,6 @@ export type VendorRoute =
   | '/vendor/payouts'
   | '/vendor/messages'
   | '/vendor/analytics'
-  | '/vendor/inventory'
   | '/vendor/support'
   | '/vendor/settings';
 
@@ -54,6 +53,13 @@ export interface VendorNavItem {
  * customers are reached through the quote or order that involves them —
  * a separate list of people with no action attached to them is a menu
  * entry that never gets pressed twice.
+ *
+ * Inventory is gone for a different reason: LOCI is a request-for-quote
+ * marketplace, not a catalogue. A shop does not pre-load what it stocks
+ * and wait to be found — it receives a buyer's booklist and prices that
+ * list. A shelf of products with no request attached to it answers a
+ * question nobody here asks, and maintaining one is work the model does
+ * not pay a shop back for.
  */
 export const VENDOR_NAV: VendorNavItem[] = [
   { key: 'dashboard', label: 'Dashboard', icon: 'home-outline', route: '/vendor' },
@@ -61,8 +67,6 @@ export const VENDOR_NAV: VendorNavItem[] = [
   // requests and track the answers, not keep lists of books.
   { key: 'quotes', label: 'Requests & Quotes', icon: 'pricetags-outline', route: '/vendor/quotes' },
   { key: 'orders', label: 'Orders', icon: 'cube-outline', route: '/vendor/orders' },
-  // What the shop sells, as opposed to what it has been asked for.
-  { key: 'inventory', label: 'Inventory', icon: 'library-outline', route: '/vendor/inventory' },
   { key: 'payouts', label: 'Payouts', icon: 'wallet-outline', route: '/vendor/payouts' },
   { key: 'messages', label: 'Messaging', icon: 'chatbubble-outline', route: '/vendor/messages' },
   { key: 'analytics', label: 'Analytics', icon: 'bar-chart-outline', route: '/vendor/analytics' },

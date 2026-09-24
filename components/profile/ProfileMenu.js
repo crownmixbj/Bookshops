@@ -34,14 +34,13 @@ function Badge({ label, tone = 'neutral', icon }) {
   );
 }
 
-function Stat({ value, label, demo }) {
+function Stat({ value, label }) {
   return (
     <View style={styles.stat}>
       <Text style={styles.statValue}>{value}</Text>
       <Text style={styles.statLabel} numberOfLines={2}>
         {label}
       </Text>
-      {demo && <Text style={styles.statDemo}>example</Text>}
     </View>
   );
 }
@@ -279,12 +278,21 @@ export function ProfileMenu({ visible, onClose }) {
                       }
                     />
                     <View style={styles.stats}>
-                      {/* TODO(db): vendors has no rating column. */}
-                      <Stat
-                        value={`${vendorRating.rating} ★`}
-                        label={`Rating · ${vendorRating.review_count} reviews`}
-                        demo
-                      />
+                      {/* vendorRating is null until at least one review
+                          exists. "0 ★" would read as a bad shop rather
+                          than a new one, which is the opposite of true
+                          and unfair to a business that has done nothing
+                          wrong. */}
+                      {vendorRating ? (
+                        <Stat
+                          value={`${vendorRating.rating.toFixed(1)} ★`}
+                          label={`Rating · ${vendorRating.review_count} review${
+                            vendorRating.review_count === 1 ? '' : 's'
+                          }`}
+                        />
+                      ) : (
+                        <Stat value="—" label="No rating yet" />
+                      )}
                       <Stat value={counts.completedOrders} label="Completed orders" />
                     </View>
                   </>
@@ -296,31 +304,38 @@ export function ProfileMenu({ visible, onClose }) {
                       value={profile?.phone_number || 'Not added yet'}
                     />
 
-                    <Text style={styles.sectionLabel}>
-                      Delivery addresses
-                      <Text style={styles.sectionDemo}>  · example data</Text>
-                    </Text>
-                    {/* TODO(db): needs an `addresses` table — see useProfileDetails.js */}
-                    {addresses.map((a) => (
-                      <View key={a.id} style={styles.address}>
-                        <Ionicons name="location-outline" size={15} color={colors.textFaint} />
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.addressLabel}>
-                            {a.label}
-                            {a.is_default ? ' · Default' : ''}
-                          </Text>
-                          <Text style={styles.addressLine} numberOfLines={1}>
-                            {a.line1}, {a.city}
-                          </Text>
+                    {/* Singular: profiles holds one default delivery
+                        address, so the old plural promised a list the
+                        buyer could not have. */}
+                    <Text style={styles.sectionLabel}>Delivery address</Text>
+                    {addresses.length === 0 ? (
+                      <Text style={styles.addressEmpty}>
+                        No delivery address saved yet. Add one in Settings so shops know where to
+                        send your books.
+                      </Text>
+                    ) : (
+                      addresses.map((a) => (
+                        <View key={a.id} style={styles.address}>
+                          <Ionicons name="location-outline" size={15} color={colors.textFaint} />
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.addressLabel}>{a.label}</Text>
+                            <Text style={styles.addressLine} numberOfLines={1}>
+                              {[a.line1, a.city].filter(Boolean).join(', ')}
+                            </Text>
+                            {!!a.phone && (
+                              <Text style={styles.addressLine} numberOfLines={1}>
+                                {a.phone}
+                              </Text>
+                            )}
+                          </View>
                         </View>
-                      </View>
-                    ))}
+                      ))
+                    )}
 
                     <View style={styles.stats}>
                       <Stat value={counts.activeBooklists} label="Active booklists" />
                       <Stat value={counts.pendingQuotes} label="Pending quotes" />
-                      {/* TODO(db): needs a `saved_shops` table. */}
-                      <Stat value={savedShopsCount} label="Saved shops" demo />
+                      <Stat value={savedShopsCount} label="Saved shops" />
                     </View>
                   </>
                 )}
@@ -454,7 +469,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginBottom: spacing.sm,
   },
-  sectionDemo: { color: colors.orangeDark, fontStyle: 'italic' },
 
   address: {
     flexDirection: 'row',
@@ -463,6 +477,12 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
     borderTopWidth: 1,
     borderTopColor: colors.border,
+  },
+  addressEmpty: {
+    fontSize: font.sm,
+    color: colors.textFaint,
+    lineHeight: 18,
+    paddingVertical: spacing.sm,
   },
   addressLabel: { fontSize: font.sm, fontWeight: '700', color: colors.text },
   addressLine: { fontSize: font.sm, color: colors.textMuted, marginTop: 1 },
@@ -478,7 +498,6 @@ const styles = StyleSheet.create({
   },
   statValue: { fontSize: font.xl, fontWeight: '800', color: colors.navy },
   statLabel: { fontSize: font.xs, color: colors.textMuted, textAlign: 'center', marginTop: 2 },
-  statDemo: { fontSize: 9, color: colors.orangeDark, fontStyle: 'italic', marginTop: 1 },
 
   vendorLink: {
     flexDirection: 'row',

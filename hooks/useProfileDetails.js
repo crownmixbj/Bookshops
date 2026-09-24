@@ -5,39 +5,83 @@ import { getSessionUser, subscribeToAuthReloads } from '../lib/loadState';
 /**
  * Everything the profile dropdown shows, for either role.
  *
- * What is REAL (read from Supabase):
+ * Every value here is read from Supabase. There is no placeholder
+ * section any more:
  *   full_name, phone_number, role      profiles
  *   email, email verification          auth.users (email_confirmed_at)
  *   active booklists, pending quotes   book_requests / quotes  (buyer)
+ *   delivery address                   profiles.default_delivery_*
+ *   saved shops count                  saved_shops
  *   shop name, address, city, active   vendors                 (vendor)
+ *   rating and review count            vendors.rating / review_count
  *   completed orders                   orders via quotes       (vendor)
  *
- * What is PLACEHOLDER (no schema for it — each is flagged `demo: true`
- * so the UI can label it rather than quietly inventing a number):
- *   saved delivery addresses   needs an `addresses` table
- *   saved shops count          needs a `saved_shops` join table
- *   vendor average rating      needs vendors.rating / a reviews table
+ * The three fixtures that used to live here — two invented Lagos
+ * addresses, a saved-shops count of 4, and a 4.8-star rating with 132
+ * reviews — were shown on real people's profiles and on real
+ * businesses. Each of them had a real source in the database the whole
+ * time; the tables simply landed after the fixtures did. A rating in
+ * particular is not decoration: it is the number a parent uses to pick
+ * who to buy from.
  *
  * Counts use { count: 'exact', head: true } so Postgres returns a count
  * without shipping any rows.
  */
 
-/** TODO(db): needs an `addresses` table (id, profile_id, label, line1, city, is_default). */
-export const MOCK_ADDRESSES = [
-  { id: 'a1', demo: true, label: 'Home', line1: '14 Adeniyi Jones Ave', city: 'Ikeja, Lagos', is_default: true },
-  { id: 'a2', demo: true, label: 'Office', line1: '3 Ozumba Mbadiwe Rd', city: 'Victoria Island, Lagos', is_default: false },
-];
+/**
+ * The buyer's delivery address, in the shape the menu renders.
+ *
+ * A LIST with one entry at most, not because there is a list in the
+ * database but because the menu already renders a list and the schema
+ * may grow one later — `profiles` holds exactly one default address
+ * today (address, city, state, phone), so a buyer has one or none.
+ *
+ * Returns [] rather than a placeholder row when nothing is set. An
+ * address the buyer has not given is not an address, and a greyed
+ * example in its place is the thing this replaced: two invented Lagos
+ * streets that a parent could mistake for their own saved details.
+ */
+export function deliveryAddressesFrom(profile) {
+  const line1 = (profile?.default_delivery_address ?? '').trim();
+  const city = (profile?.default_delivery_city ?? '').trim();
+  const state = (profile?.default_delivery_state ?? '').trim();
+  // The street is what makes it an address. A city on its own cannot be
+  // delivered to, so it is not worth a row.
+  if (!line1) return [];
+  return [
+    {
+      id: 'default',
+      label: 'Default delivery address',
+      line1,
+      // "Ikeja, Lagos" when both are set; whichever exists otherwise.
+      city: [city, state].filter(Boolean).join(', '),
+      phone: (profile?.default_delivery_phone ?? '').trim() || null,
+      is_default: true,
+    },
+  ];
+}
 
-/** TODO(db): needs a `saved_shops` table (profile_id, vendor_id). */
-export const MOCK_SAVED_SHOPS_COUNT = 4;
-
-/** TODO(db): needs vendors.rating + vendors.review_count, or a reviews table. */
-export const MOCK_VENDOR_RATING = { rating: 4.8, review_count: 132 };
+/**
+ * A shop's rating, or null when nobody has rated it.
+ *
+ * vendors.rating is nullable and review_count defaults to 0, so a new
+ * shop reads as (null, 0). Rendering that as "0 ★" would say the shop
+ * was rated badly rather than not yet rated — the opposite of true, and
+ * on a marketplace that is somebody's livelihood.
+ */
+export function vendorRatingFrom(vendor) {
+  const count = Number(vendor?.review_count ?? 0);
+  const rating = vendor?.rating == null ? null : Number(vendor.rating);
+  if (rating == null || !Number.isFinite(rating) || count < 1) return null;
+  return { rating, review_count: count };
+}
 
 const EMPTY = {
   user: null,
   profile: null,
   vendor: null,
+  addresses: [],
+  savedShopsCount: 0,
   counts: { activeBooklists: 0, pendingQuotes: 0, completedOrders: 0 },
 };
 
@@ -89,19 +133,24 @@ export function useProfileDetails({ enabled = true } = {}) {
 
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
-        .select('id, full_name, phone_number, role, created_at')
+        .select(
+          'id, full_name, phone_number, role, created_at, ' +
+            'default_delivery_address, default_delivery_city, ' +
+            'default_delivery_state, default_delivery_phone'
+        )
         .eq('id', user.id)
         .maybeSingle();
       if (profileError) throw profileError;
 
       const role = profile?.role ?? 'buyer';
       let vendor = null;
+      let savedShopsCount = 0;
       const counts = { activeBooklists: 0, pendingQuotes: 0, completedOrders: 0 };
 
       if (role === 'vendor') {
         const { data: v, error: vendorError } = await supabase
           .from('vendors')
-          .select('id, store_name, address, city, is_active, created_at')
+          .select('id, store_name, address, city, is_active, created_at, rating, review_count')
           .eq('profile_id', user.id)
           .maybeSingle();
         if (vendorError) throw vendorError;
@@ -135,10 +184,27 @@ export function useProfileDetails({ enabled = true } = {}) {
           .eq('status', 'sent');
         if (qError) throw qError;
         counts.pendingQuotes = quotes ?? 0;
+
+        // saved_shops_select_own already scopes this to the signed-in
+        // buyer, so the count needs no filter of its own. Not fatal:
+        // a shop-count query that fails should cost the number, not the
+        // whole profile card.
+        const { count: saved, error: savedError } = await supabase
+          .from('saved_shops')
+          .select('vendor_id', { count: 'exact', head: true });
+        if (savedError) console.warn('[profile] saved shops count failed:', savedError.message);
+        savedShopsCount = saved ?? 0;
       }
 
       if (!current()) return;
-      setState({ user, profile: profile ?? null, vendor, counts });
+      setState({
+        user,
+        profile: profile ?? null,
+        vendor,
+        counts,
+        savedShopsCount,
+        addresses: deliveryAddressesFrom(profile),
+      });
     } catch (e) {
       if (!current()) return;
       // The profile is gone with the session; leaving the last person's
@@ -195,7 +261,7 @@ export function useProfileDetails({ enabled = true } = {}) {
     });
   }, [enabled, load]);
 
-  const { user, profile, vendor, counts } = state;
+  const { user, profile, vendor, counts, savedShopsCount, addresses } = state;
   const role = profile?.role ?? 'buyer';
 
   return {
@@ -219,9 +285,11 @@ export function useProfileDetails({ enabled = true } = {}) {
     emailVerified: Boolean(user?.email_confirmed_at ?? user?.confirmed_at),
     displayName:
       profile?.full_name?.trim() || user?.email?.split('@')[0] || 'Your account',
-    // Placeholders — see the TODOs above.
-    addresses: MOCK_ADDRESSES,
-    savedShopsCount: MOCK_SAVED_SHOPS_COUNT,
-    vendorRating: MOCK_VENDOR_RATING,
+    /** Real: the buyer's own default address, or [] when unset. */
+    addresses,
+    /** Real: rows in saved_shops belonging to this buyer. */
+    savedShopsCount,
+    /** Real: null until the shop has at least one review. */
+    vendorRating: vendorRatingFrom(vendor),
   };
 }
