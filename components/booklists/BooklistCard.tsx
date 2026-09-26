@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { CATEGORY_LABEL } from '../../hooks/useBooklists';
 import { LINE_PRICE_LABEL, linePriceState } from '../../lib/booklistPricing';
 import { signBooklistImage } from '../../lib/booklistUpload';
+import { quoteCta } from '../../lib/quoteNavigation';
 import type { Booklist, FulfillmentStatus, PricedBooklistItem, RequestStatus } from '../../types/db';
 import { colors, spacing, radius, font, shadow, formatNaira } from '../../theme';
 
@@ -33,11 +34,13 @@ const FULFILMENT_COPY: Record<FulfillmentStatus, string> = {
 
 function Chip({ label, tone = 'neutral', icon }: {
   label: string;
-  tone?: 'neutral' | 'info' | 'success' | 'warning';
+  tone?: 'neutral' | 'info' | 'success' | 'warning' | 'child';
   icon?: keyof typeof Ionicons.glyphMap;
 }) {
   const t =
-    tone === 'success'
+    tone === 'child'
+      ? { bg: '#FDF1E6', fg: colors.orangeDark }
+      : tone === 'success'
       ? { bg: '#E4F2E8', fg: colors.success }
       : tone === 'warning'
       ? { bg: colors.warningBg, fg: colors.warning }
@@ -140,7 +143,12 @@ function ItemRow({
 interface Props {
   booklist: Booklist;
   defaultExpanded?: boolean;
-  onPressQuotes?: (booklist: Booklist) => void;
+  /**
+   * Opening the buyer's quotes. `path` is resolved by quoteCta(), so the
+   * card and the screen cannot disagree about where the button goes —
+   * the screen only has to navigate.
+   */
+  onPressQuotes?: (booklist: Booklist, path: string) => void;
   onEdit?: (booklist: Booklist) => void;
   onPublish?: (booklist: Booklist) => void;
   onDelete?: (booklist: Booklist) => void;
@@ -193,6 +201,12 @@ export function BooklistCard({
 
   const status = STATUS_COPY[booklist.status];
   const liveQuotes = booklist.quotes.filter((q) => q.status === 'sent').length;
+  /**
+   * Label and destination together — see lib/quoteNavigation. Null when
+   * no shop has sent anything the buyer can look at, which is when the
+   * button below does not render at all.
+   */
+  const cta = quoteCta(booklist.id, booklist.quotes);
 
   /**
    * Line id -> its number on the list.
@@ -292,6 +306,11 @@ export function BooklistCard({
               .join(' · ')}
           </Text>
           <View style={styles.chipRow}>
+            {/* First, because in a household with several children it
+                is the first thing a parent reads a list by. */}
+            {booklist.child && (
+              <Chip label={booklist.child.full_name} tone="child" icon="person-outline" />
+            )}
             <Chip label={status.label} tone={status.tone} />
             {booklist.order && (
               <Chip
@@ -501,16 +520,30 @@ export function BooklistCard({
             </View>
           )}
 
-          {liveQuotes > 0 && (
+          {/* The way in to the quotes themselves.
+              Shown whenever there is anything to see, not only while an
+              offer is live: a buyer who declined the only quote still
+              needs a route to the record of it, and this was the single
+              way into /booklists/[id] from this screen. */}
+          {cta && (
             <Pressable
-              onPress={() => onPressQuotes?.(booklist)}
-              style={({ pressed }) => [styles.cta, pressed && styles.pressed]}
+              onPress={() => onPressQuotes?.(booklist, cta.path)}
+              style={({ pressed }) => [
+                styles.cta,
+                liveQuotes === 0 && styles.ctaQuiet,
+                pressed && styles.pressed,
+              ]}
               accessibilityRole="button"
+              accessibilityLabel={`${cta.hint} for ${booklist.school_name || 'this booklist'}`}
             >
-              <Text style={styles.ctaText}>
-                Compare {liveQuotes} quote{liveQuotes === 1 ? '' : 's'}
+              <Text style={[styles.ctaText, liveQuotes === 0 && styles.ctaQuietText]}>
+                {cta.label}
               </Text>
-              <Ionicons name="arrow-forward" size={15} color={colors.onNavy} />
+              <Ionicons
+                name="arrow-forward"
+                size={15}
+                color={liveQuotes === 0 ? colors.navy : colors.onNavy}
+              />
             </Pressable>
           )}
         </View>
@@ -745,5 +778,14 @@ const styles = StyleSheet.create({
     marginTop: spacing.lg,
   },
   ctaText: { color: colors.onNavy, fontWeight: '700', fontSize: font.md },
+  // Nothing is outstanding, so the button is a way back to a record
+  // rather than a call to action. Filled navy here would read as "you
+  // have something to do" on a booklist where the buyer does not.
+  ctaQuiet: {
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+  },
+  ctaQuietText: { color: colors.navy },
   pressed: { opacity: 0.85 },
 });

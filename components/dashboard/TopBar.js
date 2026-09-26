@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { View, Text, TextInput, Pressable, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, radius, font, shadow, typography } from '../../theme';
@@ -20,13 +21,27 @@ export function TopBar({
   onMenuPress,
   onProfilePress,
   onSupportPress,
-  unreadCount = 3,
+  onBrandPress,
+  onNotificationsPress,
+  // Was a hard-coded 3 — a dot that never went away because nothing
+  // behind it could ever be read. Now the real unread count, or 0.
+  unreadCount = 0,
+  onSearchFocus,
+  onSearchBlur,
+  onSearchSubmit,
+  // The results panel. Rendered by the shell, positioned here, because
+  // only the bar knows where the search box actually sits.
+  // No default: a `= null` default would make TypeScript infer the
+  // prop as null-only in the .tsx callers.
+  searchOverlay,
 }) {
   const { isMobile } = useLayout();
+  const [barHeight, setBarHeight] = useState(0);
+  const [searchBox, setSearchBox] = useState({ x: 0, width: 0 });
 
   return (
     <View style={styles.wrap}>
-      <View style={styles.bar}>
+      <View style={styles.bar} onLayout={(e) => setBarHeight(e.nativeEvent.layout.height)}>
         {isMobile && (
           <Pressable
             onPress={onMenuPress}
@@ -39,24 +54,49 @@ export function TopBar({
           </Pressable>
         )}
 
-        <View style={styles.brand}>
+        {/* The logo is the universal way home: every marketplace teaches
+            people to click it, and on a phone it is the only dashboard
+            link that does not need the drawer. */}
+        <Pressable
+          onPress={onBrandPress}
+          style={({ pressed }) => [styles.brand, pressed && styles.brandPressed]}
+          accessibilityRole="link"
+          accessibilityLabel="LOCI-BOOK home — go to your dashboard"
+          hitSlop={6}
+        >
           <View style={styles.brandMark}>
             <Text style={styles.brandMarkText}>L</Text>
           </View>
           {!isMobile && <Text style={styles.brandText}>LOCI-BOOK</Text>}
-        </View>
+        </Pressable>
 
-        <View style={styles.searchWrap}>
+        <View
+          style={styles.searchWrap}
+          onLayout={(e) => setSearchBox({ x: e.nativeEvent.layout.x, width: e.nativeEvent.layout.width })}
+        >
           <Ionicons name="search" size={16} color={colors.textFaint} style={styles.searchIcon} />
           <TextInput
             value={query}
             onChangeText={onQueryChange}
-            placeholder={isMobile ? 'Search' : 'Find your bookshop or supplies'}
+            placeholder={isMobile ? 'Search' : 'Search booklists, books or shops'}
             placeholderTextColor={colors.textFaint}
             style={styles.searchInput}
             returnKeyType="search"
-            accessibilityLabel="Find your bookshop or supplies"
+            accessibilityLabel="Search booklists, books and shops"
+            onFocus={onSearchFocus}
+            onBlur={onSearchBlur}
+            onSubmitEditing={onSearchSubmit}
           />
+          {!!query && (
+            <Pressable
+              onPress={() => onQueryChange?.('')}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel="Clear search"
+            >
+              <Ionicons name="close-circle" size={16} color={colors.textFaint} />
+            </Pressable>
+          )}
         </View>
 
         {/* Only grows where there is slack to absorb. On a phone the bar
@@ -79,13 +119,20 @@ export function TopBar({
         </Pressable>
 
         <Pressable
+          onPress={onNotificationsPress}
           style={styles.iconBtn}
           accessibilityRole="button"
-          accessibilityLabel={`Notifications, ${unreadCount} unread`}
+          accessibilityLabel={
+            unreadCount > 0 ? `Notifications, ${unreadCount} unread` : 'Notifications'
+          }
           hitSlop={8}
         >
           <Ionicons name="notifications-outline" size={22} color={colors.navy} />
-          {unreadCount > 0 && <View style={styles.badge} />}
+          {unreadCount > 0 && (
+            <View style={styles.badge}>
+              <Text style={styles.badgeText}>{unreadCount > 9 ? '9+' : unreadCount}</Text>
+            </View>
+          )}
         </Pressable>
 
         <Pressable
@@ -99,6 +146,20 @@ export function TopBar({
         </Pressable>
         </View>
       </View>
+
+      {!!searchOverlay && barHeight > 0 && (
+        <View
+          style={[
+            styles.overlay,
+            { top: barHeight - 4 },
+            isMobile
+              ? { left: spacing.md, right: spacing.md }
+              : { left: searchBox.x, width: Math.max(searchBox.width, 420) },
+          ]}
+        >
+          {searchOverlay}
+        </View>
+      )}
 
       <View style={styles.ribbon}>
         <Text style={styles.ribbonText} numberOfLines={1}>
@@ -122,7 +183,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
   },
-  brand: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  brand: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, borderRadius: radius.sm },
+  brandPressed: { opacity: 0.75 },
+  overlay: { position: 'absolute', zIndex: 50, elevation: 12 },
   brandMark: {
     width: 30,
     height: 30,
@@ -186,13 +249,19 @@ const styles = StyleSheet.create({
   iconBtn: { padding: spacing.sm },
   badge: {
     position: 'absolute',
-    top: 6,
-    right: 6,
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+    top: 2,
+    right: 0,
+    minWidth: 17,
+    height: 17,
+    borderRadius: 9,
+    paddingHorizontal: 4,
     backgroundColor: colors.orange,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: colors.surface,
   },
+  badgeText: { color: colors.onNavy, fontSize: 9, fontWeight: '800' },
   avatar: {
     width: 32,
     height: 32,
@@ -204,12 +273,17 @@ const styles = StyleSheet.create({
 
   ribbon: {
     backgroundColor: colors.navy,
-    // spacing.md, up from spacing.sm. At 8px the line sat hard against
-    // the bar above and the page below, which is what made a one-line
-    // welcome read as cramped rather than calm.
-    paddingVertical: spacing.md,
+    // spacing.lg, up from md and originally sm. This is the full-bleed
+    // navy band under the top bar and the first thing on the page, so
+    // it sets the tone for everything below it; at 8px it read as a
+    // system notification strip rather than a masthead. The minHeight
+    // is what actually gives it presence — padding alone still collapses
+    // to the height of one 13px line.
+    paddingVertical: spacing.lg,
     paddingHorizontal: spacing.lg,
+    minHeight: 48,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   // 13px / 500 / +0.3 tracking. The tracking is doing real work here:
   // this is a single wide line of near-white on navy, and letterforms

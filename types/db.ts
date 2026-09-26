@@ -167,6 +167,12 @@ export interface Vendor {
   /** Maintained by trigger as orders reach delivered. */
   completed_orders: number;
 
+  /**
+   * Public https URL of the shop photo (shop-media bucket). Optional on
+   * the type: absent until bookshops_vendor_promotions.sql has run.
+   */
+  logo_url?: string | null;
+
   /** Peak-season flag the vendor sets themselves. */
   busy_mode: boolean;
   busy_note: string | null;
@@ -248,6 +254,13 @@ export interface VendorQuoteRow {
   order_id: string | null;
   order_fulfillment_status: FulfillmentStatus | null;
   is_targeted: boolean;
+  /**
+   * The buyer's words when they declined, when they gave any.
+   *
+   * Null for every other status — a withdrawn quote is the shop's own
+   * doing and an expired one is nobody's, so neither carries a reason.
+   */
+  decline_reason: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -376,6 +389,12 @@ export interface BookRequest {
    */
   target_vendor_id: string | null;
   /**
+   * The child this list is for. Optional on the type, not just
+   * nullable: a build that has not run bookshops_buyer_portal.sql has no
+   * such column, so a select omits the key rather than returning null.
+   */
+  child_id?: string | null;
+  /**
    * The shop behind target_vendor_id, embedded by the query.
    *
    * Null both when the list is open to the market and when the targeted
@@ -477,6 +496,9 @@ export interface Order {
   /** Always https — enforced by a CHECK constraint. */
   tracking_url: string | null;
 
+  /** Set when this order was paid as part of a multi-quote checkout. */
+  checkout_group_id?: string | null;
+
   created_at: string;
   updated_at: string;
 }
@@ -552,6 +574,8 @@ export interface BooklistItemGroup {
 }
 
 export interface Booklist extends BookRequest {
+  /** The child this list is for, resolved from child_id. Null when unlabelled. */
+  child: Child | null;
   items: PricedBooklistItem[];
   groups: BooklistItemGroup[];
   quotes: Quote[];
@@ -584,4 +608,66 @@ export interface Booklist extends BookRequest {
    * add up.
    */
   totalMatchesLines: boolean;
+}
+
+/* ------------------------------------------------------------------ */
+/* Household, address book, alerts (bookshops_buyer_portal.sql)        */
+/* ------------------------------------------------------------------ */
+
+/** A child in the buyer's household. Never visible to vendors. */
+export interface Child {
+  id: string;
+  parent_id: string;
+  full_name: string;
+  school_name: string | null;
+  class_level: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type EditableChild = Pick<Child, 'full_name' | 'school_name' | 'class_level'>;
+
+/** A saved delivery address. The default one prefills checkout. */
+export interface DeliveryAddress {
+  id: string;
+  profile_id: string;
+  label: string;
+  recipient_name: string;
+  phone: string;
+  address: string;
+  city: string;
+  state: string | null;
+  lga: string | null;
+  landmark: string | null;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export type EditableAddress = Omit<DeliveryAddress, 'id' | 'profile_id' | 'created_at' | 'updated_at'>;
+
+export type NotificationKind =
+  | 'quote_received'
+  | 'quote_updated'
+  | 'quote_withdrawn'
+  | 'message'
+  | 'payment_held'
+  | 'order_dispatched'
+  | 'order_delivered'
+  | 'order_cancelled'
+  | 'escrow_released';
+
+/** One in-app alert. Written by database triggers, never by the client. */
+export interface AppNotification {
+  id: string;
+  kind: NotificationKind;
+  title: string;
+  body: string | null;
+  /** An in-app route ('/quotes/…'). The CHECK constraint keeps it relative. */
+  link: string | null;
+  quote_id: string | null;
+  order_id: string | null;
+  request_id: string | null;
+  created_at: string;
+  read_at: string | null;
 }

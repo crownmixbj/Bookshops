@@ -12,6 +12,8 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../../utils/supabase';
+import { ChildPicker } from '../household/ChildPicker';
+import type { Child } from '../../types/db';
 import {
   uploadBooklistImage,
   parseBooklistImage,
@@ -125,6 +127,8 @@ export function BooklistReviewModal({
 
   const [school, setSchool] = useState('');
   const [classLevel, setClassLevel] = useState('');
+  /** Which child the list is for. Null = not labelled with a child. */
+  const [child, setChild] = useState<Child | null>(null);
   const [items, setItems] = useState<ParsedItem[]>([]);
   const [imagePath, setImagePath] = useState<string | null>(null);
   const [showPhoto, setShowPhoto] = useState(false);
@@ -187,6 +191,7 @@ export function BooklistReviewModal({
     setNotice(null);
     setSchool('');
     setClassLevel('');
+    setChild(null);
     setItems([]);
     setImagePath(null);
     setShowPhoto(false);
@@ -529,6 +534,9 @@ export function BooklistReviewModal({
           school_name: school.trim(),
           class_level: classLevel.trim(),
           image_path: imagePath,
+          // Only sent when chosen, so a project that has not run
+          // bookshops_buyer_portal.sql never sees an unknown column.
+          ...(child ? { child_id: child.id } : {}),
           // PUBLISHED_STATUS is the SINGULAR 'pending_quote' — the value
           // vendor_request_queue() filters on. See lib/booklistUpload.ts.
           status: publish ? PUBLISHED_STATUS : DRAFT_STATUS,
@@ -648,6 +656,22 @@ export function BooklistReviewModal({
               keyboardShouldPersistTaps="handled"
             >
               {/* ---- header info ---- */}
+              <ChildPicker
+                value={child?.id ?? null}
+                onChange={(next) => {
+                  // Fill school and class from the child only where the
+                  // field is empty or still holds the previous child's
+                  // value — never over what the photo or the buyer said.
+                  const prev = child;
+                  if (next?.school_name && (!school.trim() || school === (prev?.school_name ?? ''))) {
+                    setSchool(next.school_name);
+                  }
+                  if (next?.class_level && (!classLevel.trim() || classLevel === (prev?.class_level ?? ''))) {
+                    setClassLevel(next.class_level);
+                  }
+                  setChild(next);
+                }}
+              />
               <Text style={styles.label}>School</Text>
               <TextInput
                 value={school}

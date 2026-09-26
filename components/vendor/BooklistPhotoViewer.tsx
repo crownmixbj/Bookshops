@@ -12,7 +12,8 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { signBooklistImage } from '../../lib/booklistUpload';
+import { BUCKET as BOOKLIST_BUCKET, signBooklistImage } from '../../lib/booklistUpload';
+import { downloadStorageFile } from '../../lib/quoteFiles';
 import { colors, spacing, radius, font } from '../../theme';
 
 /**
@@ -79,6 +80,55 @@ function useSignedBooklistImage(path: string | null | undefined) {
   return { url, loading, failed, resign: sign, markFailed: () => setFailed(true) };
 }
 
+/** File name the vendor's device saves the handout under. */
+function downloadNameFor(path: string, title?: string): string {
+  const ext = path.split('.').pop()?.toLowerCase() || 'jpg';
+  const base = (title || 'booklist').trim().replace(/\s+/g, '-').toLowerCase();
+  return `${base}-booklist.${ext}`;
+}
+
+function useDownload(path: string | null | undefined, title?: string) {
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const download = useCallback(async () => {
+    if (!path || busy) return;
+    setBusy(true);
+    setMessage(null);
+    const result = await downloadStorageFile(BOOKLIST_BUCKET, path, downloadNameFor(path, title));
+    setBusy(false);
+    if (!result.ok) setMessage(result.message ?? 'The download failed.');
+    else if (result.message) setMessage(result.message);
+  }, [path, title, busy]);
+  return { download, busy, message };
+}
+
+function DownloadButton({
+  onPress,
+  busy,
+  label = 'Download image',
+}: {
+  onPress: () => void;
+  busy: boolean;
+  label?: string;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={busy}
+      style={({ pressed }) => [styles.downloadBtn, pressed && styles.pressed]}
+      accessibilityRole="button"
+      accessibilityLabel="Download the buyer's booklist photo"
+    >
+      {busy ? (
+        <ActivityIndicator size="small" color={colors.navy} />
+      ) : (
+        <Ionicons name="download-outline" size={16} color={colors.navy} />
+      )}
+      <Text style={styles.downloadText}>{label}</Text>
+    </Pressable>
+  );
+}
+
 export function BooklistPhotoViewer({
   imagePath,
   title,
@@ -90,6 +140,7 @@ export function BooklistPhotoViewer({
   variant?: Variant;
 }) {
   const { url, loading, failed, resign, markFailed } = useSignedBooklistImage(imagePath);
+  const { download, busy: downloading, message: downloadMessage } = useDownload(imagePath, title);
   const [open, setOpen] = useState(false);
   // One automatic re-sign per URL when the <Image> itself fails to load:
   // the likeliest cause is an expired signature, not a missing object.
@@ -113,45 +164,50 @@ export function BooklistPhotoViewer({
   const canOpen = !!url && !failed;
 
   if (variant === 'reference') {
+    // Siblings, not nested: a download button inside the pressable row
+    // would be a <button> inside a <button> on web.
     return (
       <>
-        <Pressable
-          onPress={() => canOpen && setOpen(true)}
-          disabled={!canOpen}
-          style={({ pressed }) => [styles.refRow, pressed && styles.pressed]}
-          accessibilityRole="button"
-          accessibilityLabel="Open the buyer's original booklist photo"
-        >
-          <View style={styles.refThumb}>
-            {loading ? (
-              <ActivityIndicator size="small" color={colors.navy} />
-            ) : canOpen ? (
-              <Image
-                source={{ uri: url! }}
-                style={StyleSheet.absoluteFill}
-                resizeMode="cover"
-                onError={onImageError}
-              />
-            ) : (
-              <Ionicons name="image-outline" size={20} color={colors.textFaint} />
-            )}
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.refTitle}>Buyer's original photo</Text>
-            <Text style={styles.refHint}>
-              {failed
-                ? 'This photo could not be opened.'
-                : 'Tap to zoom in and check the lines below against it.'}
-            </Text>
-          </View>
+        <View style={styles.refRow}>
+          <Pressable
+            onPress={() => canOpen && setOpen(true)}
+            disabled={!canOpen}
+            style={({ pressed }) => [styles.refOpen, pressed && styles.pressed]}
+            accessibilityRole="button"
+            accessibilityLabel="Open the buyer's original booklist photo"
+          >
+            <View style={styles.refThumb}>
+              {loading ? (
+                <ActivityIndicator size="small" color={colors.navy} />
+              ) : canOpen ? (
+                <Image
+                  source={{ uri: url! }}
+                  style={StyleSheet.absoluteFill}
+                  resizeMode="cover"
+                  onError={onImageError}
+                />
+              ) : (
+                <Ionicons name="image-outline" size={20} color={colors.textFaint} />
+              )}
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.refTitle}>Buyer's original photo</Text>
+              <Text style={styles.refHint}>
+                {failed
+                  ? 'This photo could not be opened.'
+                  : 'Tap to zoom in and check the lines below against it.'}
+              </Text>
+            </View>
+          </Pressable>
           {failed ? (
             <Pressable onPress={resign} hitSlop={8} accessibilityRole="button">
               <Text style={styles.link}>Retry</Text>
             </Pressable>
-          ) : (
-            <Ionicons name="expand-outline" size={18} color={colors.navy} />
-          )}
-        </Pressable>
+          ) : canOpen ? (
+            <DownloadButton onPress={download} busy={downloading} label="Download" />
+          ) : null}
+        </View>
+        {downloadMessage && <Text style={styles.downloadMessage}>{downloadMessage}</Text>}
         {canOpen && (
           <ZoomModal
             visible={open}
@@ -159,6 +215,7 @@ export function BooklistPhotoViewer({
             title={title}
             onClose={() => setOpen(false)}
             onError={onImageError}
+            onDownload={download}
           />
         )}
       </>
@@ -167,39 +224,48 @@ export function BooklistPhotoViewer({
 
   return (
     <View style={styles.primary}>
-      <Pressable
-        onPress={() => canOpen && setOpen(true)}
-        disabled={!canOpen}
-        style={({ pressed }) => [styles.primaryFrame, pressed && styles.pressed]}
-        accessibilityRole="button"
-        accessibilityLabel="Open the buyer's booklist photo full screen"
-      >
-        {loading ? (
-          <ActivityIndicator color={colors.navy} />
-        ) : canOpen ? (
-          <>
-            <Image
-              source={{ uri: url! }}
-              style={StyleSheet.absoluteFill}
-              resizeMode="contain"
-              onError={onImageError}
-              accessibilityLabel="The buyer's booklist photo"
-            />
-            <View style={styles.zoomBadge} pointerEvents="none">
-              <Ionicons name="search" size={13} color={colors.onNavy} />
-              <Text style={styles.zoomBadgeText}>Tap to zoom</Text>
-            </View>
-          </>
-        ) : (
-          <View style={styles.failed}>
-            <Ionicons name="alert-circle-outline" size={22} color={colors.textFaint} />
-            <Text style={styles.failedText}>This photo could not be opened.</Text>
-            <Pressable onPress={resign} hitSlop={8} accessibilityRole="button">
-              <Text style={styles.link}>Retry</Text>
-            </Pressable>
-          </View>
-        )}
-      </Pressable>
+      {canOpen || loading ? (
+        <Pressable
+          onPress={() => canOpen && setOpen(true)}
+          disabled={!canOpen}
+          style={({ pressed }) => [styles.primaryFrame, pressed && styles.pressed]}
+          accessibilityRole="button"
+          accessibilityLabel="Open the buyer's booklist photo full screen"
+        >
+          {loading ? (
+            <ActivityIndicator color={colors.navy} />
+          ) : (
+            <>
+              <Image
+                source={{ uri: url! }}
+                style={StyleSheet.absoluteFill}
+                resizeMode="contain"
+                onError={onImageError}
+                accessibilityLabel="The buyer's booklist photo"
+              />
+              <View style={styles.zoomBadge} pointerEvents="none">
+                <Ionicons name="search" size={13} color={colors.onNavy} />
+                <Text style={styles.zoomBadgeText}>Tap to zoom</Text>
+              </View>
+            </>
+          )}
+        </Pressable>
+      ) : (
+        // A plain View, so Retry is not a button inside a button on web.
+        <View style={[styles.primaryFrame, styles.failed]}>
+          <Ionicons name="alert-circle-outline" size={22} color={colors.textFaint} />
+          <Text style={styles.failedText}>This photo could not be opened.</Text>
+          <Pressable onPress={resign} hitSlop={8} accessibilityRole="button">
+            <Text style={styles.link}>Retry</Text>
+          </Pressable>
+        </View>
+      )}
+      {canOpen && (
+        <View style={styles.primaryActions}>
+          <DownloadButton onPress={download} busy={downloading} />
+          {downloadMessage && <Text style={styles.downloadMessage}>{downloadMessage}</Text>}
+        </View>
+      )}
       {canOpen && (
         <ZoomModal
           visible={open}
@@ -207,6 +273,7 @@ export function BooklistPhotoViewer({
           title={title}
           onClose={() => setOpen(false)}
           onError={onImageError}
+          onDownload={download}
         />
       )}
     </View>
@@ -217,18 +284,34 @@ export function BooklistPhotoViewer({
 /* Full-screen zoom                                                    */
 /* ------------------------------------------------------------------ */
 
-function ZoomModal({
+/** Paging through several files in one viewer: a quote's pages. */
+export interface ZoomPager {
+  index: number;
+  total: number;
+  onPrev: () => void;
+  onNext: () => void;
+}
+
+export function ZoomModal({
   visible,
   url,
   title,
   onClose,
   onError,
+  onDownload,
+  kind = 'image',
+  pager,
 }: {
   visible: boolean;
-  url: string;
+  /** Null while the current page is still being signed. */
+  url: string | null;
   title?: string;
   onClose: () => void;
-  onError: () => void;
+  onError?: () => void;
+  onDownload?: () => void;
+  /** A PDF cannot be drawn here; it gets an "Open PDF" card instead. */
+  kind?: 'image' | 'pdf';
+  pager?: ZoomPager;
 }) {
   const { width: winW, height: winH } = useWindowDimensions();
   const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
@@ -238,16 +321,18 @@ function ZoomModal({
 
   // Fresh view every time it opens: a vendor coming back to a photo
   // expects to see the whole page, not wherever they left it zoomed.
+  // Also on every page turn: page 2 should not open at page 1's zoom.
   useEffect(() => {
     if (visible) {
       setStep(0);
       setRotation(0);
     }
-  }, [visible]);
+  }, [visible, url]);
 
   useEffect(() => {
     let alive = true;
     setNatural(null);
+    if (!url || kind === 'pdf') return;
     Image.getSize(
       url,
       (w, h) => alive && setNatural({ w, h }),
@@ -258,7 +343,7 @@ function ZoomModal({
     return () => {
       alive = false;
     };
-  }, [url]);
+  }, [url, kind]);
 
   const sideways = rotation % 180 !== 0;
   const zoom = ZOOM_STEPS[step];
@@ -293,6 +378,7 @@ function ZoomModal({
       <View style={styles.backdrop}>
         <View style={styles.modalHead}>
           <Text style={styles.modalTitle} numberOfLines={1}>
+            {pager && pager.total > 1 ? `Page ${pager.index + 1} of ${pager.total} · ` : ''}
             {title || 'Booklist photo'}
           </Text>
           <Pressable
@@ -305,63 +391,114 @@ function ZoomModal({
           </Pressable>
         </View>
 
-        <ScrollView
-          style={styles.stage}
-          contentContainerStyle={styles.stageContent}
-          showsVerticalScrollIndicator
-        >
+        {kind === 'pdf' || !url ? (
+          <View style={[styles.stage, styles.stageContent]}>
+            {!url ? (
+              <ActivityIndicator color={colors.onNavy} />
+            ) : (
+              <View style={styles.pdfCard}>
+                <Ionicons name="document-text-outline" size={48} color={colors.onNavy} />
+                <Text style={styles.pdfName} numberOfLines={2}>
+                  {title || 'PDF'}
+                </Text>
+                <Pressable
+                  onPress={() => Linking.openURL(url)}
+                  style={({ pressed }) => [styles.pdfOpen, pressed && styles.pressed]}
+                  accessibilityRole="button"
+                >
+                  <Ionicons name="open-outline" size={16} color={colors.navy} />
+                  <Text style={styles.pdfOpenText}>Open PDF</Text>
+                </Pressable>
+              </View>
+            )}
+          </View>
+        ) : (
           <ScrollView
-            horizontal
+            style={styles.stage}
             contentContainerStyle={styles.stageContent}
-            showsHorizontalScrollIndicator
+            showsVerticalScrollIndicator
           >
-            <Pressable
-              onPress={onImagePress}
-              style={{ width: boxW, height: boxH }}
-              accessibilityRole="image"
-              accessibilityLabel="The buyer's booklist photo. Double tap to zoom."
+            <ScrollView
+              horizontal
+              contentContainerStyle={styles.stageContent}
+              showsHorizontalScrollIndicator
             >
-              {natural ? (
-                <Image
-                  source={{ uri: url }}
-                  resizeMode="contain"
-                  onError={onError}
-                  style={{
-                    position: 'absolute',
-                    width: imgW,
-                    height: imgH,
-                    left: (boxW - imgW) / 2,
-                    top: (boxH - imgH) / 2,
-                    transform: [{ rotate: `${rotation}deg` }],
-                  }}
-                />
-              ) : (
-                <ActivityIndicator color={colors.onNavy} style={{ marginTop: spacing.xxl }} />
-              )}
-            </Pressable>
+              <Pressable
+                onPress={onImagePress}
+                style={{ width: boxW, height: boxH }}
+                accessibilityRole="image"
+                accessibilityLabel="The photo. Double tap to zoom."
+              >
+                {natural ? (
+                  <Image
+                    source={{ uri: url }}
+                    resizeMode="contain"
+                    onError={onError}
+                    style={{
+                      position: 'absolute',
+                      width: imgW,
+                      height: imgH,
+                      left: (boxW - imgW) / 2,
+                      top: (boxH - imgH) / 2,
+                      transform: [{ rotate: `${rotation}deg` }],
+                    }}
+                  />
+                ) : (
+                  <ActivityIndicator color={colors.onNavy} style={{ marginTop: spacing.xxl }} />
+                )}
+              </Pressable>
+            </ScrollView>
           </ScrollView>
-        </ScrollView>
+        )}
 
         <View style={styles.toolbar}>
-          <ToolButton icon="remove" label="Zoom out" onPress={zoomOut} disabled={step === 0} />
-          <Text style={styles.zoomLabel}>{Math.round(zoom * 100)}%</Text>
-          <ToolButton
-            icon="add"
-            label="Zoom in"
-            onPress={zoomIn}
-            disabled={step === ZOOM_STEPS.length - 1}
-          />
-          <View style={styles.toolDivider} />
-          <ToolButton
-            icon="refresh"
-            label="Rotate"
-            onPress={() => setRotation((r) => (r + 90) % 360)}
-          />
-          <ToolButton
-            icon="open-outline"
-            label="Open original"
-            onPress={() => Linking.openURL(url)}
-          />
+          {pager && pager.total > 1 && (
+            <>
+              <ToolButton
+                icon="chevron-back"
+                label="Previous page"
+                onPress={pager.onPrev}
+                disabled={pager.index === 0}
+              />
+              <Text style={styles.zoomLabel}>
+                {pager.index + 1}/{pager.total}
+              </Text>
+              <ToolButton
+                icon="chevron-forward"
+                label="Next page"
+                onPress={pager.onNext}
+                disabled={pager.index === pager.total - 1}
+              />
+              <View style={styles.toolDivider} />
+            </>
+          )}
+          {kind === 'image' && (
+            <>
+              <ToolButton icon="remove" label="Zoom out" onPress={zoomOut} disabled={step === 0} />
+              <Text style={styles.zoomLabel}>{Math.round(zoom * 100)}%</Text>
+              <ToolButton
+                icon="add"
+                label="Zoom in"
+                onPress={zoomIn}
+                disabled={step === ZOOM_STEPS.length - 1}
+              />
+              <View style={styles.toolDivider} />
+              <ToolButton
+                icon="refresh"
+                label="Rotate"
+                onPress={() => setRotation((r) => (r + 90) % 360)}
+              />
+              <ToolButton
+                icon="open-outline"
+                label="Open original"
+                onPress={() => url && Linking.openURL(url)}
+                disabled={!url}
+              />
+            </>
+          )}
+          {onDownload && (
+            <ToolButton icon="download-outline" label="Download" onPress={onDownload} />
+          )}
         </View>
       </View>
     </Modal>
@@ -402,6 +539,31 @@ const styles = StyleSheet.create({
   link: { fontSize: font.sm, fontWeight: '700', color: colors.navy },
 
   primary: { width: '100%', marginTop: spacing.lg },
+  primaryActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: spacing.md,
+    marginTop: spacing.sm,
+  },
+  downloadBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderColor: colors.navy,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 8,
+    minHeight: 36,
+  },
+  downloadText: { fontSize: font.sm, fontWeight: '700', color: colors.navy },
+  downloadMessage: {
+    fontSize: font.xs,
+    color: colors.textMuted,
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.sm,
+  },
   primaryFrame: {
     width: '100%',
     height: 320,
@@ -439,6 +601,7 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.border,
     backgroundColor: colors.surface,
   },
+  refOpen: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   refThumb: {
     width: 52,
     height: 52,
@@ -487,6 +650,18 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   toolBtnOff: { opacity: 0.35 },
+  pdfCard: { alignItems: 'center', gap: spacing.md, maxWidth: 320 },
+  pdfName: { fontSize: font.md, fontWeight: '700', color: colors.onNavy, textAlign: 'center' },
+  pdfOpen: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: colors.onNavy,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: 10,
+  },
+  pdfOpenText: { fontSize: font.md, fontWeight: '700', color: colors.navy },
   toolDivider: {
     width: 1,
     height: 24,

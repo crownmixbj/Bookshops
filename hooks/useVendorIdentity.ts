@@ -31,7 +31,10 @@ export function useVendorIdentity(enabled: boolean) {
     const { data } = await supabase
       .from('vendors')
       .select('*')
-      .eq('owner_id', user.id)
+      // profile_id, not owner_id: vendors has no owner_id column, so the
+      // old filter errored and every vendor saw "Your shop" with busy
+      // mode stuck off.
+      .eq('profile_id', user.id)
       .maybeSingle();
     setVendor((data as Vendor) ?? null);
   }, [enabled]);

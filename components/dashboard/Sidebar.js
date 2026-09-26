@@ -21,13 +21,16 @@ export const NAV_ITEMS = [
   { key: 'dashboard', label: 'Dashboard', icon: 'home-outline', route: '/' },
   { key: 'booklists', label: 'My Booklists', icon: 'list-outline', route: '/booklists' },
   { key: 'orders', label: 'My Orders', icon: 'cart-outline', route: '/orders' },
+  // After orders: a conversation with a shop is almost always about a
+  // quote you are weighing or an order on its way.
+  { key: 'messages', label: 'Messages', icon: 'chatbubbles-outline', route: '/messages' },
   { key: 'shops', label: 'Bookshops', icon: 'storefront-outline', route: '/shops' },
   { key: 'support', label: 'Help & Support', icon: 'help-buoy-outline', route: '/support' },
   { key: 'settings', label: 'Settings', icon: 'settings-outline', route: '/settings' },
   { key: 'logout', label: 'Logout', icon: 'log-out-outline', route: null, danger: true },
 ];
 
-function NavRow({ item, active, collapsed, onPress }) {
+function NavRow({ item, active, collapsed, onPress, badge = 0 }) {
   return (
     <Pressable
       onPress={() => onPress(item)}
@@ -39,13 +42,16 @@ function NavRow({ item, active, collapsed, onPress }) {
       ]}
       accessibilityRole="button"
       accessibilityState={{ selected: active }}
-      accessibilityLabel={item.label}
+      accessibilityLabel={badge > 0 ? `${item.label}, ${badge} unread` : item.label}
     >
-      <Ionicons
-        name={item.icon}
-        size={19}
-        color={active ? colors.onNavy : item.danger ? colors.textMuted : colors.navy}
-      />
+      <View>
+        <Ionicons
+          name={item.icon}
+          size={19}
+          color={active ? colors.onNavy : item.danger ? colors.textMuted : colors.navy}
+        />
+        {collapsed && badge > 0 && <View style={styles.railDot} />}
+      </View>
       {!collapsed && (
         <Text
           style={[styles.navLabel, active && styles.navLabelActive]}
@@ -54,11 +60,18 @@ function NavRow({ item, active, collapsed, onPress }) {
           {item.label}
         </Text>
       )}
+      {!collapsed && badge > 0 && (
+        <View style={[styles.badge, active && styles.badgeActive]}>
+          <Text style={[styles.badgeText, active && styles.badgeTextActive]}>
+            {badge > 99 ? '99+' : badge}
+          </Text>
+        </View>
+      )}
     </Pressable>
   );
 }
 
-function SidebarBody({ activeKey, onNavigate, collapsed, onClose }) {
+function SidebarBody({ activeKey, onNavigate, collapsed, onClose, badges = {} }) {
   return (
     <View style={[styles.panel, collapsed && styles.panelCollapsed]}>
       <View style={styles.header}>
@@ -78,6 +91,7 @@ function SidebarBody({ activeKey, onNavigate, collapsed, onClose }) {
             active={item.key === activeKey}
             collapsed={collapsed}
             onPress={onNavigate}
+            badge={badges[item.key] ?? 0}
           />
         ))}
       </View>
@@ -90,7 +104,7 @@ function SidebarBody({ activeKey, onNavigate, collapsed, onClose }) {
  * and a slide-over Modal drawer on mobile. The Modal keeps the drawer
  * above everything without a gesture library.
  */
-export function Sidebar({ activeKey = 'dashboard', onNavigate, drawerOpen, onCloseDrawer }) {
+export function Sidebar({ activeKey = 'dashboard', onNavigate, drawerOpen, onCloseDrawer, badges = {} }) {
   const { sidebarMode } = useLayout();
 
   if (sidebarMode === 'drawer') {
@@ -106,6 +120,7 @@ export function Sidebar({ activeKey = 'dashboard', onNavigate, drawerOpen, onClo
           <SidebarBody
             activeKey={activeKey}
             collapsed={false}
+            badges={badges}
             onClose={onCloseDrawer}
             onNavigate={(item) => {
               onCloseDrawer?.();
@@ -121,6 +136,7 @@ export function Sidebar({ activeKey = 'dashboard', onNavigate, drawerOpen, onClo
     <SidebarBody
       activeKey={activeKey}
       collapsed={sidebarMode === 'rail'}
+      badges={badges}
       onNavigate={onNavigate}
     />
   );
@@ -159,7 +175,28 @@ const styles = StyleSheet.create({
   navRowCollapsed: { justifyContent: 'center', paddingHorizontal: 0 },
   navRowActive: { backgroundColor: colors.navy },
   navRowPressed: { backgroundColor: colors.surfaceMuted },
-  navLabel: { ...typography.heading, color: colors.text },
+  navLabel: { ...typography.heading, color: colors.text, flex: 1 },
+  badge: {
+    minWidth: 20,
+    height: 20,
+    paddingHorizontal: 6,
+    borderRadius: 10,
+    backgroundColor: colors.orange,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  badgeActive: { backgroundColor: colors.onNavy },
+  badgeText: { color: colors.onNavy, fontSize: 11, fontWeight: '800' },
+  badgeTextActive: { color: colors.navy },
+  railDot: {
+    position: 'absolute',
+    top: -2,
+    right: -4,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: colors.orange,
+  },
   navLabelActive: { color: colors.onNavy, fontWeight: '700' },
 
   scrim: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(15,30,61,0.45)' },

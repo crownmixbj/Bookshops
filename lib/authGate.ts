@@ -32,7 +32,7 @@ const PROTECTED_ROOTS = new Set(['checkout', 'quotes', 'booklists', 'admin', 've
 const GUEST_ALLOWED_PATHS = new Set(['booklists/new-manual']);
 
 /** Tabs that need one. The rest of the tab group is browsable. */
-const PROTECTED_TABS = new Set(['orders', 'booklists', 'saved', 'settings', 'admin', 'vendor']);
+const PROTECTED_TABS = new Set(['orders', 'booklists', 'messages', 'saved', 'settings', 'admin', 'vendor']);
 
 /**
  * Does this route require a signed-in user?

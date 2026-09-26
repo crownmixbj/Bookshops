@@ -299,6 +299,22 @@ export function useDashboardData() {
 
       if (requestsError) throw requestsError;
 
+      // Which child each list is for (bookshops_buyer_portal.sql). Read
+      // separately and allowed to fail: naming child_id in the select
+      // above would blank the dashboard on a project without the column,
+      // over what is only a label.
+      if (requests?.length) {
+        const [{ data: links, error: linksError }, { data: kids, error: kidsError }] = await Promise.all([
+          supabase.from('book_requests').select('id, child_id').in('id', requests.map((r) => r.id)),
+          supabase.from('children').select('id, full_name').eq('parent_id', user.id),
+        ]);
+        if (!linksError && !kidsError) {
+          const nameOf = new Map((kids ?? []).map((k) => [k.id, k.full_name]));
+          const childOf = new Map((links ?? []).map((l) => [l.id, l.child_id]));
+          for (const r of requests) r.child_name = nameOf.get(childOf.get(r.id)) ?? null;
+        }
+      }
+
       // How many drafts are waiting, without fetching them: head + count
       // returns the number and no rows. Two things need it — the card's
       // empty state, which would otherwise tell a buyer with three drafts

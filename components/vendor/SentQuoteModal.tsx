@@ -13,6 +13,15 @@ import { supabase } from '../../utils/supabase';
 import type { QuoteItem, VendorQuoteRow } from '../../types/db';
 import { colors, spacing, radius, font, shadow, formatNaira } from '../../theme';
 import { useLayout } from '../../hooks/useLayout';
+import { QuoteResponseGallery } from '../booklists/QuoteResponseGallery';
+import { parseResponseFiles, type StoredFile } from '../../lib/quoteFiles';
+
+/** The single-total part of a quote, when it was sent that way. */
+interface LumpSum {
+  total: number;
+  note: string | null;
+  files: StoredFile[];
+}
 
 interface Props {
   /** The quote to show. Null closes the modal. */
@@ -34,6 +43,7 @@ interface Props {
 export function SentQuoteModal({ quote, onClose }: Props) {
   const { isMobile } = useLayout();
   const [items, setItems] = useState<QuoteItem[]>([]);
+  const [lumpSum, setLumpSum] = useState<LumpSum | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -44,15 +54,32 @@ export function SentQuoteModal({ quote, onClose }: Props) {
     (async () => {
       setLoading(true);
       setError(null);
-      const { data, error: e } = await supabase
-        .from('quote_items')
-        .select('id, quote_id, request_item_id, title, quantity, unit_price, is_available, position, created_at, updated_at')
-        .eq('quote_id', quote.quote_id)
-        .order('position', { ascending: true });
+      setLumpSum(null);
+      const [{ data, error: e }, { data: header, error: headerError }] = await Promise.all([
+        supabase
+          .from('quote_items')
+          .select('id, quote_id, request_item_id, title, quantity, unit_price, is_available, position, created_at, updated_at')
+          .eq('quote_id', quote.quote_id)
+          .order('position', { ascending: true }),
+        supabase
+          .from('quotes')
+          .select('pricing_mode, total_price, vendor_note, response_files')
+          .eq('id', quote.quote_id)
+          .maybeSingle(),
+      ]);
 
       if (cancelled) return;
-      if (e) setError(e.message);
-      else setItems((data ?? []) as QuoteItem[]);
+      if (e || headerError) setError((e ?? headerError)!.message);
+      else {
+        setItems((data ?? []) as QuoteItem[]);
+        if (header?.pricing_mode === 'lump_sum') {
+          setLumpSum({
+            total: Number(header.total_price) || 0,
+            note: header.vendor_note ?? null,
+            files: parseResponseFiles(header.response_files),
+          });
+        }
+      }
       setLoading(false);
     })();
 
@@ -64,7 +91,11 @@ export function SentQuoteModal({ quote, onClose }: Props) {
   const available = items.filter((i) => i.is_available);
   // Recomputed from the lines rather than read off quotes.total_price, so
   // the figure shown is demonstrably the sum of what is above it.
-  const total = available.reduce((sum, i) => sum + (i.unit_price ?? 0) * i.quantity, 0);
+  // A single-total quote has no lines to sum; its total is the one the
+  // shop typed, which is also what checkout charges.
+  const total = lumpSum
+    ? lumpSum.total
+    : available.reduce((sum, i) => sum + (i.unit_price ?? 0) * i.quantity, 0);
 
   return (
     <Modal visible={quote !== null} transparent animationType="fade" onRequestClose={onClose}>
@@ -86,6 +117,23 @@ export function SentQuoteModal({ quote, onClose }: Props) {
           </View>
 
           <ScrollView style={styles.body}>
+            {/* Above the line items on purpose. For a quote that was
+                declined, why it was declined is the one thing worth
+                reading; the prices are what the shop already knows. */}
+            {quote?.quote_status === 'rejected' && (
+              <View style={styles.declined}>
+                <Ionicons name="close-circle-outline" size={16} color={colors.danger} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.declinedLabel}>The customer declined this quote</Text>
+                  {quote?.decline_reason ? (
+                    <Text style={styles.declinedReason}>“{quote?.decline_reason}”</Text>
+                  ) : (
+                    <Text style={styles.declinedNone}>They did not say why.</Text>
+                  )}
+                </View>
+              </View>
+            )}
+
             {loading ? (
               <View style={styles.loading}>
                 <ActivityIndicator color={colors.navy} />
@@ -94,6 +142,21 @@ export function SentQuoteModal({ quote, onClose }: Props) {
               <View style={styles.errorBox}>
                 <Ionicons name="alert-circle" size={15} color={colors.danger} />
                 <Text style={styles.errorText}>{error}</Text>
+              </View>
+            ) : lumpSum ? (
+              <View style={styles.lumpSum}>
+                <Text style={styles.lumpSumLabel}>Sent as one total with your priced sheet</Text>
+                {lumpSum.files.length ? (
+                  <QuoteResponseGallery files={lumpSum.files} />
+                ) : (
+                  <Text style={styles.empty}>No file is attached to this quote.</Text>
+                )}
+                {!!lumpSum.note && (
+                  <>
+                    <Text style={styles.lumpSumLabel}>Your note</Text>
+                    <Text style={styles.lumpSumNote}>{lumpSum.note}</Text>
+                  </>
+                )}
               </View>
             ) : items.length === 0 ? (
               <Text style={styles.empty}>
@@ -144,10 +207,13 @@ export function SentQuoteModal({ quote, onClose }: Props) {
           <View style={styles.foot}>
             <View style={{ flex: 1 }}>
               <Text style={styles.footLabel}>
-                {available.length} item{available.length === 1 ? '' : 's'} quoted
-                {items.length !== available.length
-                  ? ` · ${items.length - available.length} unavailable`
-                  : ''}
+                {lumpSum
+                  ? 'Total quoted'
+                  : `${available.length} item${available.length === 1 ? '' : 's'} quoted${
+                      items.length !== available.length
+                        ? ` · ${items.length - available.length} unavailable`
+                        : ''
+                    }`}
               </Text>
               <Text style={styles.footTotal}>{formatNaira(total)}</Text>
             </View>
@@ -166,6 +232,9 @@ export function SentQuoteModal({ quote, onClose }: Props) {
 }
 
 const styles = StyleSheet.create({
+  lumpSum: { gap: spacing.sm, padding: spacing.lg },
+  lumpSumLabel: { fontSize: font.sm, fontWeight: '700', color: colors.textMuted },
+  lumpSumNote: { fontSize: font.md, color: colors.text, lineHeight: 20 },
   scrim: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(15,30,61,0.45)' },
   centre: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.lg },
   card: {
@@ -222,6 +291,25 @@ const styles = StyleSheet.create({
   outOfStock: { fontSize: font.xs, color: colors.warning, marginTop: 2 },
   price: { fontSize: font.md, fontWeight: '700', color: colors.text },
   priceMuted: { color: colors.textFaint, fontWeight: '500', fontSize: font.sm },
+
+  declined: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    backgroundColor: '#FCEAE8',
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  declinedLabel: { fontSize: font.sm, fontWeight: '700', color: colors.danger },
+  declinedReason: {
+    fontSize: font.md,
+    color: colors.text,
+    lineHeight: 20,
+    marginTop: 3,
+    fontStyle: 'italic',
+  },
+  declinedNone: { fontSize: font.sm, color: colors.textMuted, marginTop: 3 },
 
   errorBox: {
     flexDirection: 'row',

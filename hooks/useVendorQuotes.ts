@@ -32,11 +32,29 @@ export function stateFor(row: VendorQuoteRow): VendorQuoteState {
       return 'draft';
     case 'sent':
       return 'sent';
-    // rejected, withdrawn and expired all mean the same thing to a shop:
-    // finished, nothing further to do.
+    // rejected, withdrawn and expired share a tab because the shop's
+    // next action is the same for all three: none. They are NOT the
+    // same event though, and declinedBy() below tells them apart — a
+    // buyer saying no is worth reading, a quote the shop withdrew
+    // itself is not.
     default:
       return 'declined';
   }
+}
+
+/**
+ * Who ended this quote, for a row already in the 'declined' state.
+ *
+ * The tab lumps three endings together, but they mean different things
+ * to a shop: 'buyer' is a lost job with something to learn from,
+ * 'shop' is their own withdrawal, and 'expired' is a job they were too
+ * slow to answer. Returns null for anything still live.
+ */
+export function declinedBy(row: VendorQuoteRow): 'buyer' | 'shop' | 'expired' | null {
+  if (stateFor(row) !== 'declined') return null;
+  if (row.quote_status === 'rejected') return 'buyer';
+  if (row.quote_status === 'withdrawn') return 'shop';
+  return 'expired';
 }
 
 /** Only an unaccepted quote is still the vendor's to change. */

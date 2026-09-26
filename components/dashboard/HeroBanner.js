@@ -1,4 +1,5 @@
-import { View, Text, Image, Pressable, StyleSheet } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { View, Text, Animated, AccessibilityInfo, Pressable, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, radius, shadow, typography } from '../../theme';
 import { useLayout } from '../../hooks/useLayout';
@@ -13,68 +14,243 @@ import { useLayout } from '../../hooks/useLayout';
  * in the editor and 500s in the bundler is not worth the tidier string,
  * and require() is what react-native's Image wants anyway.
  *
- * The asset is the CROPPED version. The original is 1024x572 with the
- * subject pushed into the right half and roughly 440px of empty gradient
- * backdrop on the left — it was drawn as a full-width marketing banner
- * with copy space beside the artwork. Dropped straight into a split
- * panel, that empty half renders as a large beige gap between the
- * headline and the illustration. The crop removes 360px of backdrop and
- * nothing else; the nearest real pixel starts at x=438, so there is
- * still 78px of clearance around the artwork. hero-banner-full.jpg is
- * the untouched original, kept for a full-bleed treatment later.
+ * The photos are NOT pre-cropped. All three have their subject from
+ * about x=400–465 rightwards; everything left of that is backdrop drawn as copy
+ * space for a full-width banner. The layout below removes that space in
+ * code rather than in extra image files — see artFrame().
+ *
+ * The previous artwork (hero-banner.jpg, and its uncropped original
+ * hero-banner-full.jpg) is no longer referenced but left in assets.
  */
-const HERO_IMAGE = require('../../assets/images/hero-banner.jpg');
-
-/** Intrinsic aspect of the cropped asset (664 x 572). */
-const HERO_ASPECT = 664 / 572;
+/**
+ * The carousel, in order. All three are 1024x572 on a clean white or
+ * light-grey studio backdrop, with the subject in the right-hand ~55%,
+ * so one artFrame() fits them all:
+ *
+ *   hero-banner1  hands holding a clipboard booklist and the priced quote
+ *                 on a phone (backdrop ~#F3F3F3)
+ *   hero-banner2  a hand photographing a handwritten booklist with a phone
+ *                 on a light wooden desk (backdrop ~#EDF1F2)
+ *   hero-banner3  an illustrated parade of three bookshop fronts on a
+ *                 pavement (backdrop ~#F8F9F4)
+ */
+const HERO_SLIDES = [
+  require('../../assets/images/hero-banner1.jpeg'),
+  require('../../assets/images/hero-banner2.jpeg'),
+  require('../../assets/images/hero-banner3.jpeg'),
+];
 
 /**
- * Sampled from the crop's own top-left pixel (#B39980).
- *
- * The backdrop is a gradient, not a flat fill, so no single colour can
- * match all four edges. This one matches the edge a letterbox actually
- * sits against, which makes `contain` look like generous padding rather
- * than a mismatched band.
+ * Every 5 seconds, with a 1.2s crossfade. The hold timer restarts when
+ * a new photo begins fading in, so a change starts every 5s exactly.
  */
-const HERO_BACKDROP = '#B39980';
+const SLIDE_HOLD_MS = 5000;
+const SLIDE_FADE_MS = 1200;
+
+/** Intrinsic size of every hero photo. */
+const HERO_W = 1024;
+const HERO_H = 572;
+
+/**
+ * Where the subject begins, in source pixels. The clipboard's left edge
+ * is at x≈480; left of x≈460 there is only the tip of a forearm in the
+ * bottom corner. 450 keeps the whole clipboard with a sliver of backdrop
+ * beside it, and lets that bit of forearm go.
+ */
+const SUBJECT_LEFT = 450;
+
+/**
+ * The whole hero card's background — copy side and photo side alike.
+ *
+ * One light neutral sitting between the three photos' own backdrops
+ * (#EDF1F2 – #F8F9F4), so every photo reads as printed on the card
+ * rather than pasted onto it. Not pure #FFFFFF: all three photos are a
+ * shade darker than white, and against it their edges would show as
+ * faint grey boxes. It is also what fills
+ * any strip a photo does not cover (artFrame's third case, narrow
+ * tablets), and being one colour for all three, nothing jumps when one
+ * photo fades into the next.
+ */
+const HERO_BACKDROP = '#F3F4F1';
+
+/**
+ * The seam between the copy side and the photo.
+ *
+ * Even on one shared background, a photo's cut edge can show as a faint
+ * line where its backdrop is a shade off the card's. This lays a short
+ * card-colour-to-clear fade over the photo's inner edge (its left on wide
+ * screens, its bottom on a phone, where the copy sits underneath) so the
+ * photo dissolves into the card instead. No gradient library in
+ * the project, so it is 36 hairline bands of falling opacity, 2px each
+ * (72px in all). Fewer, wider bands showed as visible stripes; at 2px
+ * and ~3% opacity per step the fade reads as continuous.
+ */
+const SEAM_BANDS = 36;
+const SEAM_BAND_PX = 2;
+
+function SeamFade({ side }) {
+  const horizontal = side === 'left';
+  return (
+    <View
+      pointerEvents="none"
+      style={[styles.seam, horizontal ? styles.seamLeft : styles.seamBottom]}
+    >
+      {Array.from({ length: SEAM_BANDS }, (_, i) => {
+        // Eased, so it is solid card colour at the seam and melts out.
+        const t = 1 - i / SEAM_BANDS;
+        return (
+          <View
+            key={i}
+            style={{
+              backgroundColor: HERO_BACKDROP,
+              opacity: t * t,
+              [horizontal ? 'width' : 'height']: SEAM_BAND_PX,
+            }}
+          />
+        );
+      })}
+    </View>
+  );
+}
+
+
+/**
+ * Size and place the photo inside a panel of `w` x `h`.
+ *
+ * React Native has no object-position, so "cover, but keep the right
+ * side" is done by hand: the image is drawn larger than the panel and
+ * pinned to its bottom-right corner, and the panel's overflow clips the
+ * rest. Pinned right because that is where the subject is; pinned
+ * bottom because the hands run off the bottom edge of the photo, and a
+ * gap under them would look like a mistake.
+ *
+ * Three cases, in order of preference:
+ *   1. Fit the height. The empty left side is clipped away. Used while
+ *      the panel is wide enough to show the whole subject.
+ *   2. The panel is wider than the photo at that height: fit the width
+ *      instead and let the empty sky at the top be clipped.
+ *   3. The panel is too narrow to show the subject at full height: scale
+ *      down until the subject fits the width. The strip left above it is
+ *      filled by the matching backdrop colour.
+ */
+function artFrame(w, h) {
+  if (!w || !h) return null;
+  const byHeight = h / HERO_H;
+  if (HERO_W * byHeight < w) {
+    const s = w / HERO_W;
+    return { width: w, height: HERO_H * s };
+  }
+  if (w / byHeight >= HERO_W - SUBJECT_LEFT) {
+    return { width: HERO_W * byHeight, height: h };
+  }
+  const s = w / (HERO_W - SUBJECT_LEFT);
+  return { width: HERO_W * s, height: HERO_H * s };
+}
 
 /**
  * The dashboard hero.
  *
  * Split on wide screens — headline and CTA left, artwork right — and
- * stacked on mobile, artwork first. The text sits on a solid navy panel
- * rather than over the image: there is no gradient library in this
- * project, and white type laid directly on a photograph whose brightness
- * runs from #B39980 to #DECCB8 is a contrast gamble that fails on
- * exactly the devices hardest to test.
+ * stacked on mobile, artwork first. The whole card is one light neutral
+ * (HERO_BACKDROP) matching the photos' studio backdrops, so there is no
+ * colour split between the halves; the type is dark navy on that light
+ * ground for contrast. Text never sits over a photo.
  *
- * resizeMode is `contain`, not `cover`. The illustration is a single
- * composed object — a shop, a phone and five price tags on connecting
- * light trails — and `cover` crops whichever edge does not fit the
- * panel's aspect. At desktop widths that is the top and bottom, which
- * takes the ₦19,800 tag and the shop's base. `contain` keeps every part
- * of it at every width, and the matched backdrop hides the letterbox.
+ * The photo fills its panel edge to edge, anchored bottom-right, with
+ * its empty left-hand backdrop clipped off — artFrame() above does the
+ * sizing. `contain` would have letterboxed it; plain `cover` would have
+ * centred it and cut into the clipboard on narrower screens.
  */
 export function HeroBanner({ onCreate, onBrowse }) {
   const { isMobile, isDesktop } = useLayout();
+  const [panel, setPanel] = useState({ w: 0, h: 0 });
+  const frame = artFrame(panel.w, panel.h);
+
+  // ---- slideshow ------------------------------------------------
+  // `current` fades in ON TOP of `prev`, which stays fully opaque
+  // underneath until the fade ends. Fading one out while the other fades
+  // in would dip through the panel colour halfway; this never does.
+  // Every photo stays mounted, so each is decoded once and a change
+  // never waits on a load.
+  const [current, setCurrent] = useState(0);
+  const [prev, setPrev] = useState(null);
+  const fade = useRef(new Animated.Value(1)).current;
+  const [still, setStill] = useState(false);
+
+  // Respect "reduce motion": the first photo, and nothing moving.
+  useEffect(() => {
+    let alive = true;
+    AccessibilityInfo.isReduceMotionEnabled()
+      .then((v) => alive && setStill(v))
+      .catch(() => {});
+    const sub = AccessibilityInfo.addEventListener?.('reduceMotionChanged', setStill);
+    return () => {
+      alive = false;
+      sub?.remove?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (still || HERO_SLIDES.length < 2) return;
+    const t = setTimeout(() => {
+      setPrev(current);
+      setCurrent((i) => (i + 1) % HERO_SLIDES.length);
+    }, SLIDE_HOLD_MS);
+    return () => clearTimeout(t);
+  }, [current, still]);
+
+  useEffect(() => {
+    if (prev === null) return;
+    fade.setValue(0);
+    const run = Animated.timing(fade, { toValue: 1, duration: SLIDE_FADE_MS, useNativeDriver: true });
+    run.start(({ finished }) => finished && setPrev(null));
+    return () => run.stop();
+  }, [current, prev, fade]);
 
   const art = (
     <View
-      style={[styles.artPanel, isMobile ? styles.artPanelMobile : styles.artPanelWide]}
+      style={[
+        styles.artPanel,
+        isMobile ? styles.artPanelMobile : styles.artPanelWide,
+      ]}
       // Decorative: the headline beside it already says what the product
       // does, so a screen reader announcing the illustration as well
       // would just repeat it more vaguely.
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
+      onLayout={(e) => {
+        const { width, height } = e.nativeEvent.layout;
+        // Only when it actually changes: this runs on every layout pass.
+        if (width !== panel.w || height !== panel.h) setPanel({ w: width, h: height });
+      }}
     >
-      <Image source={HERO_IMAGE} style={styles.art} resizeMode="contain" />
+      {/* Not rendered until the panel has been measured, so the photo
+          never flashes at the wrong size on first paint. */}
+      {frame &&
+        HERO_SLIDES.map((source, i) => (
+          <Animated.Image
+            key={i}
+            source={source}
+            style={[
+              styles.art,
+              { width: frame.width, height: frame.height },
+              i === current
+                ? { opacity: prev === null ? 1 : fade, zIndex: 2 }
+                : i === prev
+                ? { opacity: 1, zIndex: 1 }
+                : { opacity: 0, zIndex: 0 },
+            ]}
+            resizeMode="stretch"
+          />
+        ))}
+      <SeamFade side={isMobile ? 'bottom' : 'left'} />
     </View>
   );
 
   const copy = (
     <View style={[styles.copyPanel, isMobile ? styles.copyPanelMobile : styles.copyPanelWide]}>
       <View style={styles.eyebrow}>
-        <Ionicons name="pricetags-outline" size={13} color={colors.onNavy} />
+        <Ionicons name="pricetags-outline" size={13} color={colors.navy} />
         <Text style={styles.eyebrowText}>Free quotes from local bookshops</Text>
       </View>
 
@@ -111,7 +287,7 @@ export function HeroBanner({ onCreate, onBrowse }) {
             accessibilityLabel="Browse bookshops"
           >
             <Text style={styles.ghostText}>Browse bookshops</Text>
-            <Ionicons name="arrow-forward" size={15} color={colors.onNavy} />
+            <Ionicons name="arrow-forward" size={15} color={colors.navy} />
           </Pressable>
         )}
       </View>
@@ -119,7 +295,13 @@ export function HeroBanner({ onCreate, onBrowse }) {
   );
 
   return (
-    <View style={[styles.wrap, isMobile ? styles.wrapMobile : styles.wrapWide]}>
+    <View
+      style={[
+        styles.wrap,
+        isMobile ? styles.wrapMobile : styles.wrapWide,
+        isDesktop && styles.wrapDesktop,
+      ]}
+    >
       {/* Artwork first on mobile so the page opens on something to look
           at, and second on wide so the headline leads the reading order.
           The DOM order changes with it rather than being flipped in CSS,
@@ -143,39 +325,59 @@ const styles = StyleSheet.create({
   wrap: {
     borderRadius: radius.lg,
     overflow: 'hidden',
-    backgroundColor: colors.navy,
+    backgroundColor: HERO_BACKDROP,
+    // The same 1px edge every dashboard card has, so a light hero still
+    // separates from the light page behind it.
+    borderWidth: 1,
+    borderColor: colors.border,
     ...shadow.card,
   },
-  wrapWide: { flexDirection: 'row', alignItems: 'stretch' },
+  /**
+   * minHeight, because otherwise the artwork is at the text's mercy.
+   *
+   * Both panels are `alignItems: 'stretch'`, so the row's height is set
+   * by the TALLER child, and the copy alone comes to only ~160px — far
+   * too short for the clipboard and phone to read at a glance.
+   *
+   * 300 keeps the photo in artFrame's first case (fit the height, clip
+   * the empty left) at most tablet widths: a ~344px art panel shows
+   * 344 / 300 × 572 ≈ 656 source pixels, more than the 574px subject.
+   */
+  wrapWide: { flexDirection: 'row', alignItems: 'stretch', minHeight: 300 },
+  // Desktop gives the hero a wider column, so the art wants more height
+  // again to fill it without letterboxing.
+  wrapDesktop: { minHeight: 340 },
   wrapMobile: { flexDirection: 'column' },
 
   /* ---- text side ---- */
-  copyPanel: { backgroundColor: colors.navy, justifyContent: 'center' },
+  copyPanel: { backgroundColor: HERO_BACKDROP, justifyContent: 'center' },
   // 1.15 against the artwork's 1, so the headline gets the larger share
   // without the illustration shrinking to a thumbnail.
-  copyPanelWide: { flex: 1.15, padding: spacing.xl, minWidth: 0 },
-  copyPanelMobile: { padding: spacing.lg },
+  copyPanelWide: { flex: 1.15, padding: spacing.xxl, minWidth: 0 },
+  copyPanelMobile: { padding: spacing.xl },
 
   eyebrow: {
     flexDirection: 'row',
     alignItems: 'center',
     alignSelf: 'flex-start',
     gap: 6,
-    backgroundColor: 'rgba(255,255,255,0.14)',
+    backgroundColor: 'rgba(30,58,110,0.08)',
     borderRadius: radius.sm,
     paddingHorizontal: spacing.sm,
     paddingVertical: 5,
     marginBottom: spacing.md,
   },
-  eyebrowText: { ...typography.caption, color: colors.onNavy, fontWeight: '600' },
+  eyebrowText: { ...typography.caption, color: colors.navy, fontWeight: '600' },
 
   // 28/700/1.2, stepping to 32 on desktop — the two hero rungs, not
   // hand-set numbers. The weight comes down from 800: at 28px and above,
   // 800 on a navy ground fills the counters and the line stops reading
   // as type and starts reading as a block.
-  headline: { ...typography.heroTitle, color: colors.onNavy },
+  // Navy on #F3F4F1 is about 10:1 — well past the 4.5:1 AA line.
+  headline: { ...typography.heroTitle, color: colors.navy },
   headlineDesktop: { ...typography.heroTitleLarge },
-  sub: { ...typography.body, color: 'rgba(255,255,255,0.80)', marginTop: spacing.sm, maxWidth: 460 },
+  // Slate (#334155) rather than the lighter body grey: ~9:1 on the card.
+  sub: { ...typography.body, color: colors.textMuted, marginTop: spacing.sm, maxWidth: 460 },
 
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.lg },
   // Full width and stacked on a phone, where a row of two buttons leaves
@@ -203,19 +405,25 @@ const styles = StyleSheet.create({
     gap: 6,
     borderRadius: radius.md,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.3)',
+    borderColor: colors.navy,
+    backgroundColor: colors.surface,
     paddingVertical: 12,
     paddingHorizontal: spacing.lg,
     minHeight: 44,
   },
-  ghostPressed: { backgroundColor: 'rgba(255,255,255,0.12)' },
-  ghostText: { ...typography.bodyStrong, fontWeight: '600', color: colors.onNavy },
+  ghostPressed: { backgroundColor: colors.surfaceMuted },
+  ghostText: { ...typography.bodyStrong, fontWeight: '600', color: colors.navy },
 
   /* ---- artwork side ---- */
-  artPanel: { backgroundColor: HERO_BACKDROP, alignItems: 'center', justifyContent: 'center' },
+  // overflow:hidden is what does the cropping: the photo is drawn larger
+  // than this panel and pinned bottom-right (see artFrame).
+  artPanel: { backgroundColor: HERO_BACKDROP, overflow: 'hidden' },
+  seam: { position: 'absolute', zIndex: 3 },
+  seamLeft: { left: 0, top: 0, bottom: 0, flexDirection: 'row' },
+  seamBottom: { left: 0, right: 0, bottom: 0, flexDirection: 'column-reverse' },
   artPanelWide: { flex: 1, minWidth: 0 },
-  // Height comes from the asset's own aspect, so the strip is never
-  // taller than the artwork needs and `contain` has nothing to letterbox.
-  artPanelMobile: { width: '100%', aspectRatio: HERO_ASPECT, maxHeight: 260 },
-  art: { width: '100%', height: '100%' },
+  // The subject's own proportions (574 x 572 once the empty left side is
+  // dropped), so a phone shows the clipboard and phone edge to edge.
+  artPanelMobile: { width: '100%', aspectRatio: (HERO_W - SUBJECT_LEFT) / HERO_H, maxHeight: 300 },
+  art: { position: 'absolute', right: 0, bottom: 0 },
 });

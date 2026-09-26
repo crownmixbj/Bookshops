@@ -31,6 +31,7 @@ import { useCreateBooklist } from '../../hooks/useCreateBooklist';
 import { supabase } from '../../utils/supabase';
 import { colors, spacing, radius, font, shadow } from '../../theme';
 import type { Booklist } from '../../types/db';
+import { BundleCheckoutCard } from '../../components/booklists/BundleCheckoutCard';
 import { Footer } from '../../components/layout/Footer';
 import { useShell } from '../../components/layout/ShellContext';
 
@@ -110,7 +111,11 @@ function Section({
               key={b.id}
               booklist={b}
               defaultExpanded={defaultExpanded && i === 0}
-              onPressQuotes={() => router.push('/')}
+              // The destination comes from the card, which resolved it
+              // with quoteCta(). This used to be router.push('/') — the
+              // one button on the screen that offers to show a buyer
+              // their quotes dropped them back on the dashboard.
+              onPressQuotes={(_b, path) => router.push(path as never)}
               onEdit={actions.onEdit}
               onPublish={actions.onPublish}
               onDelete={actions.onDelete}
@@ -149,7 +154,9 @@ export default function BooklistsScreen() {
   // navigation; this screen just reads what was typed.
   const { search } = useShell();
 
-  const { sections, userId, loading, refreshing, error, refresh, revalidate } = useBooklists();
+  const { sections, children, userId, loading, refreshing, error, refresh, revalidate } = useBooklists();
+  /** 'all', 'none' (lists not tied to a child), or a child id. */
+  const [childFilter, setChildFilter] = useState<string>('all');
 
   /** Shown after a booklist is created or changed, once its modal has closed. */
   async function handleSubmitted(message: string) {
@@ -215,14 +222,18 @@ export default function BooklistsScreen() {
 
   const q = search.trim().toLowerCase();
   const filter = (list: Booklist[]) =>
-    q
-      ? list.filter(
-          (b) =>
-            b.school_name.toLowerCase().includes(q) ||
+    list
+      .filter((b) =>
+        childFilter === 'all' ? true : childFilter === 'none' ? !b.child : b.child?.id === childFilter
+      )
+      .filter((b) =>
+        q
+          ? b.school_name.toLowerCase().includes(q) ||
             b.class_level.toLowerCase().includes(q) ||
+            (b.child?.full_name ?? '').toLowerCase().includes(q) ||
             b.items.some((i) => i.title.toLowerCase().includes(q))
-        )
-      : list;
+          : true
+      );
 
   const totalCount =
     sections.active.length + sections.draft.length + sections.archived.length;
@@ -346,6 +357,49 @@ export default function BooklistsScreen() {
             </View>
           )}
 
+          {/* One pill per child. Only once there are children to tell
+              apart — a single-child household gets no extra chrome. */}
+          {!loading && children.length > 0 && (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.childPills}
+              style={styles.childPillsScroll}
+            >
+              {[
+                { key: 'all', label: 'All children' },
+                ...children.map((c) => ({
+                  key: c.id,
+                  label: [c.full_name, c.class_level].filter(Boolean).join(' · '),
+                })),
+                { key: 'none', label: 'Not assigned' },
+              ].map((opt) => {
+                const on = childFilter === opt.key;
+                return (
+                  <Pressable
+                    key={opt.key}
+                    onPress={() => setChildFilter(opt.key)}
+                    style={[styles.childPill, on && styles.childPillOn]}
+                    accessibilityRole="tab"
+                    accessibilityState={{ selected: on }}
+                  >
+                    <Text style={[styles.childPillText, on && styles.childPillTextOn]}>{opt.label}</Text>
+                  </Pressable>
+                );
+              })}
+              <Pressable
+                onPress={() => router.push({ pathname: '/settings', params: { section: 'children' } })}
+                style={[styles.childPill, styles.childPillManage]}
+                accessibilityRole="button"
+              >
+                <Ionicons name="settings-outline" size={13} color={colors.navy} />
+                <Text style={styles.childPillText}>Manage</Text>
+              </Pressable>
+            </ScrollView>
+          )}
+
+          {!loading && <BundleCheckoutCard booklists={filter(sections.active)} />}
+
           {loading ? (
             <View style={styles.loading}>
               <ActivityIndicator color={colors.navy} />
@@ -387,6 +441,23 @@ export default function BooklistsScreen() {
 }
 
 const styles = StyleSheet.create({
+  childPillsScroll: { flexGrow: 0, marginBottom: spacing.lg },
+  childPills: { gap: spacing.sm },
+  childPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 7,
+    backgroundColor: colors.surface,
+  },
+  childPillOn: { backgroundColor: colors.navy, borderColor: colors.navy },
+  childPillManage: { borderStyle: 'dashed' },
+  childPillText: { fontSize: font.sm, fontWeight: '600', color: colors.navy },
+  childPillTextOn: { color: colors.onNavy },
   safe: { flex: 1, backgroundColor: colors.page },
   body: { flex: 1, flexDirection: 'row' },
   scroll: { flex: 1 },

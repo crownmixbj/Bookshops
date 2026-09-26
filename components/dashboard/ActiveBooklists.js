@@ -46,7 +46,7 @@ function ItemRow({ item, checked, onToggle, isLast, hasQuote }) {
 
   return (
     <View style={[styles.itemRow, isLast && styles.itemRowLast]}>
-      <Checkbox checked={checked} onToggle={onToggle} label={item.title} />
+      {onToggle && <Checkbox checked={checked} onToggle={onToggle} label={item.title} />}
       <View style={styles.itemText}>
         <View style={styles.itemTitleLine}>
           {/* Same rule as the booklist hub: a badge only when there is
@@ -96,13 +96,17 @@ function ItemRow({ item, checked, onToggle, isLast, hasQuote }) {
 }
 
 /**
- * "Active Booklist Requests" — a collapsible vendor group with a checkbox
- * row per book title. Checking a row feeds the order total, so selection
- * state is lifted to the screen rather than held here.
+ * "Active Booklist Requests" — a collapsible vendor group with a row per
+ * book title.
+ *
+ * The rows used to carry checkboxes that fed a dashboard order total.
+ * That total is gone (checkout happens per quote, or as a bundle from My
+ * Booklists), so the checkboxes only render if a caller still passes
+ * onToggleItem — the dashboard no longer does.
  */
 export function ActiveBooklists({
   requests,
-  selection,
+  selection = {},
   onToggleItem,
   onOpenRequest,
   onOpenDrafts,
@@ -267,9 +271,11 @@ export function ActiveBooklists({
                 <Text style={styles.vendorName} numberOfLines={1}>
                   {request.vendor_name}
                 </Text>
-                {!!request.class_level && (
+                {/* The child first: in a household with several classes
+                    it is how a parent tells two lists apart. */}
+                {!!(request.child_name || request.class_level) && (
                   <Text style={styles.vendorMeta} numberOfLines={1}>
-                    {request.class_level}
+                    {[request.child_name, request.class_level].filter(Boolean).join(' · ')}
                     {request.quoteCount ? ` · ${request.quoteCount} quote${request.quoteCount > 1 ? 's' : ''}` : ''}
                   </Text>
                 )}
@@ -292,7 +298,7 @@ export function ActiveBooklists({
                       item={item}
                       isLast={i === request.items.length - 1}
                       checked={selection[item.id] !== false}
-                      onToggle={() => onToggleItem(item.id)}
+                      onToggle={onToggleItem ? () => onToggleItem(item.id) : undefined}
                       hasQuote={request.hasQuote === true}
                     />
                   ))

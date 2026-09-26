@@ -14,12 +14,17 @@ import type { DraftLine } from '../../hooks/useVendorDashboard';
 import { colors, spacing, radius, font, formatNaira } from '../../theme';
 import { useLayout } from '../../hooks/useLayout';
 import { BooklistPhotoViewer } from './BooklistPhotoViewer';
+import { LumpSumQuoteForm } from './LumpSumQuoteForm';
 
 interface Props {
   request: VendorQueueRow;
   lines: DraftLine[];
   /** Object path of the buyer's booklist photo in the private bucket. */
   imagePath?: string | null;
+  /** The quoting shop. Needed for the single-total quote's file upload. */
+  vendorId?: string | null;
+  /** A single-total quote for a photo-only booklist was saved or sent. */
+  onLumpSumSaved?: (status: 'draft' | 'sent') => void;
   totals: {
     itemCount: number;
     unavailableCount: number;
@@ -128,6 +133,8 @@ export function QuoteEditor({
   request,
   lines,
   imagePath,
+  vendorId = null,
+  onLumpSumSaved,
   totals,
   loading,
   saving,
@@ -164,18 +171,36 @@ export function QuoteEditor({
           <ActivityIndicator color={colors.navy} />
         </View>
       ) : lines.length === 0 ? (
-        <View style={styles.loading}>
-          <Text style={styles.emptyText}>
-            {imagePath
-              ? "This booklist has no itemised lines yet, so there is nothing to price. The buyer uploaded a photo instead — tap it to zoom in and read the list."
-              : 'This booklist has no itemised lines yet, and the buyer did not attach a photo, so there is nothing to price.'}
-          </Text>
-          <BooklistPhotoViewer
-            imagePath={imagePath}
-            title={request.school_name}
-            variant="primary"
-          />
-        </View>
+        imagePath ? (
+          // Photo-only booklist: read the photo, then quote it with one
+          // total and the shop's own priced sheet.
+          <View>
+            <View style={styles.photoOnly}>
+              <Text style={styles.emptyText}>
+                This booklist has no itemised lines. The buyer uploaded a photo instead. Zoom in
+                or download it, price it your usual way, then send one total with your priced
+                sheet below.
+              </Text>
+              <BooklistPhotoViewer
+                imagePath={imagePath}
+                title={request.school_name}
+                variant="primary"
+              />
+            </View>
+            <LumpSumQuoteForm
+              vendorId={vendorId}
+              request={request}
+              onSaved={(status) => onLumpSumSaved?.(status)}
+            />
+          </View>
+        ) : (
+          <View style={styles.loading}>
+            <Text style={styles.emptyText}>
+              This booklist has no itemised lines yet, and the buyer did not attach a photo, so
+              there is nothing to price.
+            </Text>
+          </View>
+        )
       ) : (
         <>
           <BooklistPhotoViewer
@@ -418,6 +443,13 @@ const styles = StyleSheet.create({
   },
 
   loading: { padding: spacing.xxl, alignItems: 'center' },
+  photoOnly: {
+    padding: spacing.lg,
+    paddingBottom: 0,
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
   emptyText: {
     fontSize: font.md,
     color: colors.textMuted,

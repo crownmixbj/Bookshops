@@ -33,6 +33,7 @@ export type VendorRoute =
   | '/vendor/payouts'
   | '/vendor/messages'
   | '/vendor/analytics'
+  | '/vendor/promotions'
   | '/vendor/support'
   | '/vendor/settings';
 
@@ -61,6 +62,17 @@ export interface VendorNavItem {
  * question nobody here asks, and maintaining one is work the model does
  * not pay a shop back for.
  */
+/**
+ * Sidebar width, shared with the orange brand block in the top bar so
+ * their right edges line up.
+ *
+ * 208, up from 180. At 180 the label column is only ~114px once the
+ * padding, active border, icon and gap are taken out, and the bold
+ * "Requests & Quotes" on the active row needs ~125px, so it clipped to
+ * "Requests & Q...". 208 leaves ~142px.
+ */
+export const VENDOR_SIDEBAR_WIDTH = 208;
+
 export const VENDOR_NAV: VendorNavItem[] = [
   { key: 'dashboard', label: 'Dashboard', icon: 'home-outline', route: '/vendor' },
   // 'quotes' rather than 'booklists': what a shop does here is answer
@@ -70,6 +82,8 @@ export const VENDOR_NAV: VendorNavItem[] = [
   { key: 'payouts', label: 'Payouts', icon: 'wallet-outline', route: '/vendor/payouts' },
   { key: 'messages', label: 'Messaging', icon: 'chatbubble-outline', route: '/vendor/messages' },
   { key: 'analytics', label: 'Analytics', icon: 'bar-chart-outline', route: '/vendor/analytics' },
+  // Self-serve sponsored deals in the buyer dashboard's promo slot.
+  { key: 'promotions', label: 'Promotions', icon: 'megaphone-outline', route: '/vendor/promotions' },
   { key: 'support', label: 'Support', icon: 'help-buoy-outline', route: '/vendor/support' },
   { key: 'settings', label: 'Settings', icon: 'settings-outline', route: '/vendor/settings' },
   { key: 'logout', label: 'Logout', icon: 'log-out-outline', route: null },
@@ -219,7 +233,10 @@ export function VendorSidebar({
               size={18}
               color={active ? colors.orange : colors.textMuted}
             />
-            <Text style={[styles.navLabel, active && styles.navLabelActive]} numberOfLines={1}>
+            {/* Two lines, not one: if a label ever outgrows the column
+                (larger system font, a longer name) it wraps instead of
+                being cut to "…". */}
+            <Text style={[styles.navLabel, active && styles.navLabelActive]} numberOfLines={2}>
               {item.label}
             </Text>
             {!!badge && badge > 0 && (
@@ -285,7 +302,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     minHeight: 56,
   },
-  brandWide: { width: 180 },
+  brandWide: { width: VENDOR_SIDEBAR_WIDTH },
   brandText: { color: colors.onNavy, fontSize: 24, fontWeight: '800', letterSpacing: 1 },
 
   barMain: {
@@ -347,7 +364,7 @@ const styles = StyleSheet.create({
   busyState: { flexShrink: 1, fontSize: font.xs, color: colors.textMuted },
 
   sidebar: {
-    width: 180,
+    width: VENDOR_SIDEBAR_WIDTH,
     backgroundColor: colors.surface,
     borderRightWidth: 1,
     borderRightColor: colors.border,
@@ -364,7 +381,7 @@ const styles = StyleSheet.create({
   },
   navRowActive: { borderLeftColor: colors.orange, backgroundColor: colors.surfaceMuted },
   navRowPressed: { backgroundColor: colors.surfaceMuted },
-  navLabel: { flex: 1, fontSize: font.md, color: colors.textMuted, fontWeight: '500' },
+  navLabel: { flex: 1, minWidth: 0, fontSize: font.md, lineHeight: 18, color: colors.textMuted, fontWeight: '500' },
   navLabelActive: { color: colors.text, fontWeight: '700' },
   badge: {
     minWidth: 20,

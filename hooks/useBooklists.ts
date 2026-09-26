@@ -5,6 +5,7 @@ import type {
   BooklistBucket,
   BooklistItemGroup,
   BookRequest,
+  Child,
   BookRequestItem,
   ItemCategory,
   Order,
@@ -48,9 +49,11 @@ interface RawState {
   /** Vendor line prices for every quote above. This is where money lives. */
   quoteItems: QuoteItem[];
   orders: Order[];
+  /** The household's children, for labelling. Empty before the migration. */
+  children: Child[];
 }
 
-const EMPTY: RawState = { requests: [], items: [], quotes: [], quoteItems: [], orders: [] };
+const EMPTY: RawState = { requests: [], items: [], quotes: [], quoteItems: [], orders: [], children: [] };
 
 /**
  * Which section a request belongs in.
@@ -153,7 +156,7 @@ export function useBooklists() {
       // Without it the card knew only an opaque uuid, so a list sent to
       // one shop could not name the shop it was sent to.
       const REQUEST_COLUMNS =
-        'id, buyer_id, school_name, class_level, image_url, image_path, target_vendor_id, dispatch_type, status, created_at, updated_at, target_vendor:vendors!book_requests_target_vendor_id_fkey ( id, store_name, city, is_active )';
+        'id, buyer_id, school_name, class_level, image_url, image_path, target_vendor_id, dispatch_type, child_id, status, created_at, updated_at, target_vendor:vendors!book_requests_target_vendor_id_fkey ( id, store_name, city, is_active )';
 
       const readRequests = (columns: string) =>
         supabase
@@ -168,10 +171,15 @@ export function useBooklists() {
       // cache. Either way bookshops_dispatch_routing.sql has not been
       // run here, and naming dispatch_type fails the WHOLE select — which
       // would blank the page over a badge. Retry without it.
-      if (requestsError?.code === '42703' || requestsError?.code === 'PGRST204') {
-        ({ data: requestRows, error: requestsError } = await readRequests(
-          REQUEST_COLUMNS.replace(', dispatch_type', '')
-        ));
+      //
+      // child_id is peeled off first (bookshops_buyer_portal.sql), then
+      // dispatch_type, so a project missing only the newer column keeps
+      // its dispatch badges.
+      let columns = REQUEST_COLUMNS;
+      for (const optional of [', child_id', ', dispatch_type']) {
+        if (requestsError?.code !== '42703' && requestsError?.code !== 'PGRST204') break;
+        columns = columns.replace(optional, '');
+        ({ data: requestRows, error: requestsError } = await readRequests(columns));
       }
 
       // PGRST200 = PostgREST cannot find the relationship. The FK is
@@ -180,7 +188,7 @@ export function useBooklists() {
       // it would cost the entire booklists page.
       if (requestsError?.code === 'PGRST200') {
         ({ data: requestRows, error: requestsError } = await readRequests(
-          REQUEST_COLUMNS.slice(0, REQUEST_COLUMNS.indexOf(', target_vendor:'))
+          columns.slice(0, columns.indexOf(', target_vendor:'))
         ));
       }
       if (requestsError) throw requestsError;
@@ -206,7 +214,7 @@ export function useBooklists() {
 
       // Three scoped reads rather than one deep embed: a failure in any
       // one of them then names the table it came from.
-      const [itemsRes, quotesRes, ordersRes] = await Promise.all([
+      const [itemsRes, quotesRes, ordersRes, childrenRes] = await Promise.all([
         supabase
           .from('book_request_items')
           .select(ITEM_COLUMNS)
@@ -221,6 +229,12 @@ export function useBooklists() {
           .from('orders')
           .select('id, quote_id, buyer_id, payment_status, fulfillment_status, created_at, updated_at')
           .eq('buyer_id', user.id),
+        // Labels only. A missing table (migration not run) is not an
+        // error worth blanking the page over, so its error is ignored.
+        supabase
+          .from('children')
+          .select('id, parent_id, full_name, school_name, class_level, created_at, updated_at')
+          .eq('parent_id', user.id),
       ]);
 
       // 42703 / PGRST204: bookshops_booklist_author.sql has not been run
@@ -270,6 +284,7 @@ export function useBooklists() {
         quotes,
         quoteItems,
         orders: (ordersRes.data ?? []) as Order[],
+        children: childrenRes.error ? [] : ((childrenRes.data ?? []) as Child[]),
       });
     } catch (e) {
       if (!current()) return;
@@ -294,7 +309,7 @@ export function useBooklists() {
   }, [load]);
 
   const booklists: Booklist[] = useMemo(() => {
-    const { requests, items, quotes, quoteItems, orders } = raw;
+    const { requests, items, quotes, quoteItems, orders, children } = raw;
 
     return requests.map((request) => {
       const rawItems = items
@@ -332,6 +347,7 @@ export function useBooklists() {
 
       return {
         ...request,
+        child: request.child_id ? children.find((c) => c.id === request.child_id) ?? null : null,
         items: myItems,
         groups: groupItems(myItems),
         quotes: myQuotes,
@@ -360,6 +376,7 @@ export function useBooklists() {
   return {
     userId,
     booklists,
+    children: raw.children,
     sections,
     loading,
     refreshing,

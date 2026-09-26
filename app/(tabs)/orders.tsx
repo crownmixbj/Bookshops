@@ -31,6 +31,9 @@ interface SectionProps {
   defaultExpanded?: boolean;
   collapsible?: boolean;
   onDispute: (order: OrderView) => void;
+  onChanged: () => void;
+  /** The order a link pointed at: expanded and outlined. */
+  focusId: string | null;
 }
 
 function Section({
@@ -42,8 +45,12 @@ function Section({
   defaultExpanded = false,
   collapsible = false,
   onDispute,
+  onChanged,
+  focusId,
 }: SectionProps) {
-  const [collapsed, setCollapsed] = useState(collapsible);
+  const [collapsed, setCollapsed] = useState(
+    collapsible && !(focusId && orders.some((o) => o.id === focusId))
+  );
 
   return (
     <View style={styles.section}>
@@ -75,8 +82,10 @@ function Section({
             <OrderCard
               key={o.id}
               order={o}
-              defaultExpanded={defaultExpanded && i === 0}
+              defaultExpanded={focusId ? o.id === focusId : defaultExpanded && i === 0}
+              highlight={o.id === focusId}
               onDispute={onDispute}
+              onChanged={onChanged}
             />
           ))
         ))}
@@ -103,8 +112,14 @@ export default function OrdersScreen() {
   // charge. The confirmation belongs on this screen rather than on
   // checkout: the buyer's next question is "where is my order", and the
   // answer is the list they are now looking at.
-  const { placed } = useLocalSearchParams<{ placed?: string | string[] }>();
+  const { placed, order: orderParam } = useLocalSearchParams<{
+    placed?: string | string[];
+    order?: string | string[];
+  }>();
   const placedId = Array.isArray(placed) ? placed[0] : placed ?? null;
+  // ?order=<id> — from a notification or a message thread. Opens that
+  // order's card rather than leaving the buyer to find it.
+  const focusId = (Array.isArray(orderParam) ? orderParam[0] : orderParam) ?? placedId ?? null;
   const [confirmationShown, setConfirmationShown] = useState(true);
   const justPlaced = placedId && confirmationShown ? placedId : null;
 
@@ -197,6 +212,8 @@ export default function OrdersScreen() {
                 orders={filter(sections.active)}
                 defaultExpanded
                 onDispute={handleDispute}
+                onChanged={refresh}
+                focusId={focusId}
                 emptyText="Nothing in progress. Accept a quote on one of your booklists to place an order."
               />
               <Section
@@ -205,6 +222,8 @@ export default function OrdersScreen() {
                 icon="checkmark-done-outline"
                 orders={filter(sections.completed)}
                 onDispute={handleDispute}
+                onChanged={refresh}
+                focusId={focusId}
                 emptyText="No completed orders yet."
               />
               {sections.cancelled.length > 0 && (
@@ -215,6 +234,8 @@ export default function OrdersScreen() {
                   orders={filter(sections.cancelled)}
                   collapsible
                   onDispute={handleDispute}
+                  onChanged={refresh}
+                  focusId={focusId}
                   emptyText="Nothing cancelled."
                 />
               )}

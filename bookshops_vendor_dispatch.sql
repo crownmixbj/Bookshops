@@ -50,17 +50,24 @@ grant execute on function public.vendor_owns_order(uuid) to authenticated;
 -- ============================================================
 -- 2. Moving an order forward
 -- ============================================================
--- One function for both steps a shop can take, because the guards are
+-- One function for every step a shop can take, because the guards are
 -- identical and duplicating them is how they end up different.
 --
 -- The transitions allowed:
 --     processing -> ready       ("packed, waiting for the courier")
 --     processing -> dispatched  (packed and handed over in one go)
 --     ready      -> dispatched
+--     dispatched -> delivered   (the shop's own delivery reached the buyer)
 --
 -- Everything else is refused, including the two that matter: nothing
 -- moves backwards out of delivered, and nothing is dispatched against
 -- an order that was never paid for.
+--
+-- Marking delivered moves NO money. Escrow is released when the buyer
+-- confirms receipt, which is a separate, buyer-side step; payment_status
+-- is not touched here, and vendor_payout_summary() only counts orders
+-- whose payment is 'paid'. A shop saying "delivered" is a claim the
+-- buyer can still dispute — it is recorded, not trusted.
 create or replace function public.vendor_advance_fulfillment(
   p_order_id         uuid,
   p_next             text,
@@ -87,8 +94,8 @@ begin
     raise exception 'That order is not yours' using errcode = '42501';
   end if;
 
-  if p_next not in ('ready', 'dispatched') then
-    raise exception 'A shop can only mark an order ready or dispatched, not %', p_next
+  if p_next not in ('ready', 'dispatched', 'delivered') then
+    raise exception 'A shop can only mark an order ready, dispatched or delivered, not %', p_next
       using errcode = '22023';
   end if;
 
@@ -112,8 +119,11 @@ begin
     return;
   end if;
 
-  if v_order.fulfillment_status not in ('processing', 'ready')
-     or (p_next = 'ready' and v_order.fulfillment_status <> 'processing') then
+  if not (
+       (v_order.fulfillment_status = 'processing' and p_next in ('ready', 'dispatched'))
+    or (v_order.fulfillment_status = 'ready'      and p_next = 'dispatched')
+    or (v_order.fulfillment_status = 'dispatched' and p_next = 'delivered')
+  ) then
     raise exception 'An order that is % cannot be marked %',
       v_order.fulfillment_status, p_next
       using errcode = '22023';
@@ -131,7 +141,7 @@ begin
     updated_at         = now()
   where o.id = p_order_id;
 
-  -- dispatched_at / ready_at are stamped by the stamp_order_fulfillment
+  -- ready_at / dispatched_at / delivered_at are stamped by the stamp_order_fulfillment
   -- trigger from bookshops_orders.sql, not here. One writer for those.
   select o.id, o.fulfillment_status, o.dispatched_at
     into order_id, fulfillment_status, dispatched_at

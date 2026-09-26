@@ -32,9 +32,16 @@ export interface VendorOrderItem {
 
 export interface VendorOrder {
   id: string;
+  /** The quote this order was won from — also the key of its message thread. */
+  quote_id: string;
   /** LOCI-3F9A2C — short enough to read down a phone line. */
   reference: string;
   placed_at: string;
+  /** Step timestamps, stamped by the database trigger. Null until reached. */
+  paid_at: string | null;
+  ready_at: string | null;
+  dispatched_at: string | null;
+  delivered_at: string | null;
   amount: number;
   delivery_fee: number;
   payment_status: PaymentStatus;
@@ -54,12 +61,44 @@ export interface VendorOrder {
   school_name: string | null;
   class_level: string | null;
 
+  /**
+   * 'lump_sum' quotes were priced from the booklist photo as one figure,
+   * so they have no lines to pack against — the screen says so and
+   * shows the shop's own note instead of an empty list.
+   */
+  pricing_mode: 'itemised' | 'lump_sum';
+  vendor_note: string | null;
+
   items: VendorOrderItem[];
   /** Total copies to pack, counting quantities. */
   unitCount: number;
   /** True while the money is ours to hold rather than the shop's. */
   inEscrow: boolean;
 }
+
+/**
+ * The step a shop can take next from each state, or null when the order
+ * is out of the shop's hands. Mirrors the transitions
+ * vendor_advance_fulfillment() allows — the database is the authority,
+ * this only decides which button to draw.
+ */
+export type FulfillmentAction = 'ready' | 'dispatched' | 'delivered';
+
+export function nextActionFor(status: FulfillmentStatus): FulfillmentAction | null {
+  switch (status) {
+    case 'processing':
+      return 'ready';
+    case 'ready':
+      return 'dispatched';
+    case 'dispatched':
+      return 'delivered';
+    default:
+      return null;
+  }
+}
+
+/** Error codes that mean "the migration has not been run", not "it broke". */
+const MISSING = new Set(['42P01', '42883', 'PGRST202', 'PGRST205']);
 
 export type VendorOrderTab = 'all' | 'to_pack' | 'in_transit' | 'completed';
 
@@ -93,6 +132,7 @@ export function useVendorOrders() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [migration, setMigration] = useState<'unknown' | 'ok' | 'missing'>('unknown');
 
   const load = useCallback(async (isRefresh = false) => {
     isRefresh ? setRefreshing(true) : setLoading(true);
@@ -114,9 +154,10 @@ export function useVendorOrders() {
         .from('orders')
         .select(
           'id, quote_id, amount, delivery_fee, payment_status, fulfillment_status, placed_at, created_at, ' +
+            'paid_at, ready_at, dispatched_at, delivered_at, ' +
             'delivery_name, delivery_phone, delivery_address, delivery_city, delivery_state, delivery_notes, ' +
             'tracking_carrier, tracking_number, tracking_url, ' +
-            'quotes!inner ( id, vendor_id, request_id, book_requests ( school_name, class_level ) )'
+            'quotes!inner ( id, vendor_id, request_id, pricing_mode, vendor_note, book_requests ( school_name, class_level ) )'
         )
         .order('placed_at', { ascending: false });
 
@@ -132,7 +173,15 @@ export function useVendorOrders() {
       const { data: itemRows, error: itemError } = await supabase.rpc('vendor_order_items', {
         p_order_ids: rows.map((r) => r.id as string),
       });
-      if (itemError) throw new Error(itemError.message);
+      if (itemError) {
+        if (MISSING.has(itemError.code ?? '')) {
+          setMigration('missing');
+          setOrders([]);
+          return;
+        }
+        throw new Error(itemError.message);
+      }
+      setMigration('ok');
 
       const byOrder = new Map<string, VendorOrderItem[]>();
       for (const raw of (itemRows ?? []) as Record<string, any>[]) {
@@ -147,16 +196,28 @@ export function useVendorOrders() {
         byOrder.set(raw.order_id as string, list);
       }
 
+      // Only orders whose money actually cleared. A pending row is a
+      // checkout the buyer opened and may never finish; showing it here
+      // would put unpaid work in front of the shop.
+      const settled = rows.filter((r) =>
+        (SETTLED_PAYMENT_STATUSES as string[]).includes(r.payment_status as string)
+      );
+
       setOrders(
-        rows.map((o) => {
+        settled.map((o) => {
           const request = o.quotes?.book_requests ?? null;
           // A shop packs what it agreed to supply. An item it marked
           // unavailable when quoting is not on the picking list.
           const items = (byOrder.get(o.id) ?? []).filter((i) => i.is_available);
           return {
             id: o.id,
+            quote_id: o.quote_id as string,
             reference: referenceFor(o.id),
             placed_at: (o.placed_at as string) ?? (o.created_at as string),
+            paid_at: o.paid_at ?? null,
+            ready_at: o.ready_at ?? null,
+            dispatched_at: o.dispatched_at ?? null,
+            delivered_at: o.delivered_at ?? null,
             amount: Number(o.amount ?? 0),
             delivery_fee: Number(o.delivery_fee ?? 0),
             payment_status: (o.payment_status ?? 'pending') as PaymentStatus,
@@ -172,6 +233,8 @@ export function useVendorOrders() {
             tracking_url: o.tracking_url ?? null,
             school_name: request?.school_name ?? null,
             class_level: request?.class_level ?? null,
+            pricing_mode: o.quotes?.pricing_mode === 'lump_sum' ? 'lump_sum' : 'itemised',
+            vendor_note: o.quotes?.vendor_note ?? null,
             items,
             unitCount: items.reduce((sum, i) => sum + i.quantity, 0),
             inEscrow: o.payment_status === 'escrow_held',
@@ -217,7 +280,7 @@ export function useVendorOrders() {
   const advance = useCallback(
     async (
       orderId: string,
-      next: 'ready' | 'dispatched',
+      next: FulfillmentAction,
       tracking?: { carrier?: string; number?: string; url?: string }
     ): Promise<{ ok: true } | { ok: false; message: string }> => {
       const { error: rpcError } = await supabase.rpc('vendor_advance_fulfillment', {
@@ -241,5 +304,5 @@ export function useVendorOrders() {
     [load]
   );
 
-  return { orders, counts, byTab, loading, refreshing, error, refresh: () => load(true), advance };
+  return { orders, counts, byTab, loading, refreshing, error, migration, refresh: () => load(true), advance };
 }

@@ -6,6 +6,9 @@ import { useLocalSearchParams, router } from 'expo-router';
 import { BuyerPage, Panel, Skeleton, ErrorPanel } from '../components/buyer/BuyerPage';
 import { FormField } from '../components/auth/FormField';
 import { StatePicker } from '../components/settings/StatePicker';
+import { AddressPicker } from '../components/household/AddressPicker';
+import { useAddressBook } from '../hooks/useAddressBook';
+import type { DeliveryAddress } from '../types/db';
 import { useLayout } from '../hooks/useLayout';
 import { supabase } from '../utils/supabase';
 import {
@@ -17,6 +20,11 @@ import {
   peekRememberedReference,
   clearRememberedReference,
   hasPaystackKey,
+  loadBundleSummary,
+  startBundlePayment,
+  simulateBundlePayment,
+  BUNDLE_PROBLEM_COPY,
+  type BundleSummary,
   type CheckoutSummary,
   type DeliveryDetails,
 } from '../lib/paystack';
@@ -43,9 +51,11 @@ import { colors, spacing, radius, font, formatNaira, shadow } from '../theme';
  *      starting again. That path also covers a buyer who closed the tab
  *      and reopened it, and a phone that died on the bank's OTP page.
  *
- * The route accepts ?quote=<quote id>. Without one there is no priced
- * agreement to charge for, and the screen says so rather than showing an
- * empty form.
+ * The route accepts ?quote=<quote id>, or ?quotes=<id>,<id>,… for a
+ * multi-list checkout (one charge, one order per quote, one delivery fee
+ * per shop — priced by checkout_bundle() in Postgres, same rule as
+ * above). Without either there is no priced agreement to charge for, and
+ * the screen says so rather than showing an empty form.
  */
 
 type Phase =
@@ -72,10 +82,19 @@ const EMPTY_FORM: FormState = { name: '', phone: '', address: '', city: '', stat
 export default function CheckoutScreen() {
   const params = useLocalSearchParams<{
     quote?: string | string[];
+    quotes?: string | string[];
     reference?: string | string[];
     trxref?: string | string[];
   }>();
   const quoteId = first(params.quote);
+  // A bundle: several quotes, one charge. Deduplicated and capped here
+  // only to keep the URL honest — the server re-checks both.
+  const bundleParam = first(params.quotes);
+  const bundleIds = useMemo(
+    () => [...new Set((bundleParam ?? '').split(',').map((s) => s.trim()).filter(Boolean))].slice(0, 12),
+    [bundleParam],
+  );
+  const isBundle = bundleIds.length > 0;
   // Paystack sends both; they are the same value. trxref is the legacy
   // spelling and is still what some flows come back with.
   const returnedReference = first(params.reference) ?? first(params.trxref);
@@ -84,11 +103,42 @@ export default function CheckoutScreen() {
 
   const [phase, setPhase] = useState<Phase>('loading');
   const [summary, setSummary] = useState<CheckoutSummary | null>(null);
+  const [bundle, setBundle] = useState<BundleSummary | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [errors, setErrors] = useState<Partial<Record<keyof FormState, string>>>({});
   const [problem, setProblem] = useState<string | null>(null);
   const [testAllowed, setTestAllowed] = useState(false);
   const [awaitingRef, setAwaitingRef] = useState<string | null>(null);
+
+  // Saved addresses. The default one prefills the form (it is also what
+  // the profile prefill holds, mirrored by the database), and a new
+  // address typed here can be kept for next time.
+  const book = useAddressBook();
+  const [addressId, setAddressId] = useState<string | null>(null);
+  const [saveAddress, setSaveAddress] = useState(true);
+  const addressPrefilled = useRef(false);
+
+  const applyAddress = useCallback((a: DeliveryAddress) => {
+    setAddressId(a.id);
+    setErrors({});
+    setForm((f) => ({
+      name: a.recipient_name,
+      phone: a.phone,
+      address: a.address,
+      city: a.city,
+      state: a.state ?? '',
+      // The landmark is how a rider finds the gate; the order has no
+      // column of its own for it, so it travels in the notes.
+      notes: a.landmark ? `Landmark: ${a.landmark}` : f.notes && f.notes.startsWith('Landmark:') ? '' : f.notes,
+    }));
+  }, []);
+
+  useEffect(() => {
+    if (addressPrefilled.current || book.loading) return;
+    const preferred = book.addresses.find((a) => a.is_default) ?? book.addresses[0];
+    if (preferred) applyAddress(preferred);
+    addressPrefilled.current = true;
+  }, [book.loading, book.addresses, applyAddress]);
 
   // A returning buyer must be confirmed exactly once. Without this an
   // effect that re-runs on a param change would verify the same
@@ -133,15 +183,43 @@ export default function CheckoutScreen() {
       // Not paid after all — fall through and let them try again.
     }
 
-    if (!quoteId) {
+    if (!quoteId && !isBundle) {
       setPhase('unavailable');
       return;
     }
 
     setPhase('loading');
+
+    if (isBundle) {
+      try {
+        const [next, profile, settings] = await Promise.all([
+          loadBundleSummary(bundleIds),
+          loadProfileDefaults(),
+          loadTestSwitch(),
+        ]);
+        setBundle(next);
+        setTestAllowed(settings);
+        setForm((current) => (current === EMPTY_FORM ? profile : current));
+        if (!next.lines.some((l) => !l.problem)) {
+          setProblem(
+            next.lines.length
+              ? 'None of these lists can be paid for any more — they have been ordered, or the quotes were withdrawn.'
+              : 'Those quotes are not available to you.',
+          );
+          setPhase('unavailable');
+          return;
+        }
+        setPhase('ready');
+      } catch (e) {
+        setProblem(e instanceof Error ? e.message : String(e));
+        setPhase('unavailable');
+      }
+      return;
+    }
+
     try {
       const [next, profile, settings] = await Promise.all([
-        loadCheckoutSummary(quoteId),
+        loadCheckoutSummary(quoteId as string),
         loadProfileDefaults(),
         loadTestSwitch(),
       ]);
@@ -161,7 +239,9 @@ export default function CheckoutScreen() {
       setProblem(e instanceof Error ? e.message : String(e));
       setPhase('unavailable');
     }
-  }, [quoteId, returnedReference, settle]);
+    // bundleIds is derived from bundleParam, which is the real dependency.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quoteId, bundleParam, returnedReference, settle]);
 
   useEffect(() => {
     load();
@@ -183,8 +263,14 @@ export default function CheckoutScreen() {
     [form],
   );
 
+  /** The bundle's lines that can actually be paid for. */
+  const payableIds = useMemo(
+    () => (bundle ? bundle.lines.filter((l) => !l.problem).map((l) => l.quote_id) : []),
+    [bundle],
+  );
+
   async function submit(mode: 'paystack' | 'test') {
-    if (!quoteId) return;
+    if (!quoteId && !isBundle) return;
 
     const found = validate(form);
     setErrors(found);
@@ -193,10 +279,31 @@ export default function CheckoutScreen() {
     setProblem(null);
     setPhase('submitting');
 
-    const outcome =
-      mode === 'test'
-        ? await simulatePayment(quoteId, delivery)
-        : await startPayment(quoteId, delivery);
+    // Keep a newly typed address for next time. Best effort: a failure
+    // here must never stand between the buyer and paying.
+    if (addressId === null && saveAddress && book.migration === 'ok') {
+      await book
+        .save({
+          label: book.addresses.length === 0 ? 'Home' : `Address ${book.addresses.length + 1}`,
+          recipient_name: delivery.name,
+          phone: delivery.phone,
+          address: delivery.address,
+          city: delivery.city,
+          state: delivery.state ?? null,
+          lga: null,
+          landmark: null,
+          is_default: book.addresses.length === 0,
+        })
+        .catch(() => undefined);
+    }
+
+    const outcome = isBundle
+      ? mode === 'test'
+        ? await simulateBundlePayment(payableIds, delivery)
+        : await startBundlePayment(payableIds, delivery)
+      : mode === 'test'
+        ? await simulatePayment(quoteId as string, delivery)
+        : await startPayment(quoteId as string, delivery);
 
     if (outcome.status === 'paid') {
       setPhase('done');
@@ -315,7 +422,7 @@ export default function CheckoutScreen() {
     return (
       <BuyerPage
         eyebrow="Checkout"
-        title={quoteId ? 'This cannot be paid for' : 'Nothing selected to pay for'}
+        title={quoteId || isBundle ? 'This cannot be paid for' : 'Nothing selected to pay for'}
         subtitle="Nothing has been charged."
       >
         <ErrorPanel
@@ -323,7 +430,7 @@ export default function CheckoutScreen() {
             problem ??
             'Open the quote you want to accept and press "Accept and pay" — checkout needs to know which shop it is paying.'
           }
-          onRetry={quoteId ? load : undefined}
+          onRetry={quoteId || isBundle ? load : undefined}
         />
         <View style={styles.actions}>
           <Pressable
@@ -345,7 +452,7 @@ export default function CheckoutScreen() {
     );
   }
 
-  if (phase === 'loading' || !summary) {
+  if (phase === 'loading' || (!summary && !bundle)) {
     return (
       <BuyerPage eyebrow="Checkout" title="Loading…">
         <Panel>
@@ -360,15 +467,22 @@ export default function CheckoutScreen() {
 
   const busy = phase === 'submitting';
   const showTestButton = !hasPaystackKey || testAllowed;
+  const payTotal = bundle ? bundle.total : summary!.total;
 
   return (
     <BuyerPage
-      eyebrow="Checkout"
-      title={`Pay ${summary.store_name ?? 'this shop'}`}
+      eyebrow={bundle ? 'Household checkout' : 'Checkout'}
+      title={
+        bundle
+          ? `Pay for ${payableIds.length} booklist${payableIds.length === 1 ? '' : 's'}`
+          : `Pay ${summary!.store_name ?? 'this shop'}`
+      }
       subtitle={
-        summary.school_name
-          ? `Booklist for ${summary.school_name}`
-          : 'Confirm where these books should go, then pay.'
+        bundle
+          ? `One payment, delivered by ${bundle.shopCount} shop${bundle.shopCount === 1 ? '' : 's'}.`
+          : summary!.school_name
+            ? `Booklist for ${summary!.school_name}`
+            : 'Confirm where these books should go, then pay.'
       }
     >
       {!!problem && <ErrorPanel message={problem} />}
@@ -377,6 +491,16 @@ export default function CheckoutScreen() {
         {/* ---------------- Delivery ---------------- */}
         <View style={[styles.column, !isMobile && styles.columnWide]}>
           <Panel title="Delivery Information">
+            <AddressPicker
+              addresses={book.addresses}
+              selectedId={addressId}
+              disabled={busy}
+              onSelect={applyAddress}
+              onNew={() => {
+                setAddressId(null);
+                setForm((f) => ({ ...EMPTY_FORM, name: f.name, phone: f.phone }));
+              }}
+            />
             <View style={styles.form}>
               <FormField
                 label="Full name"
@@ -430,6 +554,21 @@ export default function CheckoutScreen() {
                 numberOfLines={2}
                 placeholder="Landmark, gate colour, best time to call"
               />
+              {addressId === null && book.migration === 'ok' && (
+                <Pressable
+                  onPress={() => setSaveAddress((v) => !v)}
+                  style={styles.saveRow}
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: saveAddress }}
+                >
+                  <Ionicons
+                    name={saveAddress ? 'checkbox' : 'square-outline'}
+                    size={18}
+                    color={saveAddress ? colors.navy : colors.textFaint}
+                  />
+                  <Text style={styles.saveText}>Save this address for next time</Text>
+                </Pressable>
+              )}
             </View>
           </Panel>
         </View>
@@ -439,26 +578,63 @@ export default function CheckoutScreen() {
           <View style={styles.summary}>
             <Text style={styles.summaryTitle}>Order summary</Text>
 
-            <View style={styles.line}>
-              <Text style={styles.lineLabel}>Items from {summary.store_name ?? 'the shop'}</Text>
-              <Text style={styles.lineValue}>{formatNaira(summary.items_total)}</Text>
-            </View>
-            <View style={styles.line}>
-              <Text style={styles.lineLabel}>Delivery</Text>
-              <Text style={styles.lineValue}>
-                {summary.delivery_fee > 0 ? formatNaira(summary.delivery_fee) : 'Free'}
-              </Text>
-            </View>
+            {bundle ? (
+              <>
+                {bundle.lines.map((l) => (
+                  <View key={l.quote_id} style={[styles.bundleLine, !!l.problem && styles.bundleLineOff]}>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={styles.bundleWho} numberOfLines={1}>
+                        {[l.child_name, l.school_name, l.class_level].filter(Boolean).join(' · ') || 'Booklist'}
+                      </Text>
+                      <Text style={styles.bundleShop} numberOfLines={1}>
+                        {l.store_name ?? 'Shop'}
+                        {!l.problem && l.delivery_fee > 0 ? ` · delivery ${formatNaira(l.delivery_fee)}` : ''}
+                        {!l.problem && l.delivery_fee === 0 && bundle.deliveryTotal > 0 ? ' · ships with the same shop' : ''}
+                      </Text>
+                      {!!l.problem && <Text style={styles.bundleProblem}>{BUNDLE_PROBLEM_COPY[l.problem]}</Text>}
+                    </View>
+                    <Text style={[styles.lineValue, !!l.problem && styles.struck]}>{formatNaira(l.items_total)}</Text>
+                  </View>
+                ))}
+                <View style={styles.line}>
+                  <Text style={styles.lineLabel}>Books</Text>
+                  <Text style={styles.lineValue}>{formatNaira(bundle.itemsTotal)}</Text>
+                </View>
+                <View style={styles.line}>
+                  <Text style={styles.lineLabel}>
+                    Delivery ({bundle.shopCount} shop{bundle.shopCount === 1 ? '' : 's'})
+                  </Text>
+                  <Text style={styles.lineValue}>
+                    {bundle.deliveryTotal > 0 ? formatNaira(bundle.deliveryTotal) : 'Free'}
+                  </Text>
+                </View>
+              </>
+            ) : (
+              <>
+                <View style={styles.line}>
+                  <Text style={styles.lineLabel}>Items from {summary!.store_name ?? 'the shop'}</Text>
+                  <Text style={styles.lineValue}>{formatNaira(summary!.items_total)}</Text>
+                </View>
+                <View style={styles.line}>
+                  <Text style={styles.lineLabel}>Delivery</Text>
+                  <Text style={styles.lineValue}>
+                    {summary!.delivery_fee > 0 ? formatNaira(summary!.delivery_fee) : 'Free'}
+                  </Text>
+                </View>
+              </>
+            )}
 
             <View style={styles.totalLine}>
               <Text style={styles.totalLabel}>Total to pay</Text>
-              <Text style={styles.totalValue}>{formatNaira(summary.total)}</Text>
+              <Text style={styles.totalValue}>{formatNaira(payTotal)}</Text>
             </View>
 
             <View style={styles.escrow}>
               <Ionicons name="shield-checkmark" size={18} color={colors.success} />
               <Text style={styles.escrowText}>
-                Payment is safely held in LOCI Escrow until you confirm receipt of your books.
+                {bundle
+                ? 'Held in LOCI Escrow. Each shop is paid separately, when you confirm its delivery.'
+                : 'Payment is safely held in LOCI Escrow until you confirm receipt of your books.'}
               </Text>
             </View>
 
@@ -471,14 +647,14 @@ export default function CheckoutScreen() {
                 (busy || !hasPaystackKey) && styles.ctaDisabled,
               ]}
               accessibilityRole="button"
-              accessibilityLabel={`Pay ${formatNaira(summary.total)} with Paystack`}
+              accessibilityLabel={`Pay ${formatNaira(payTotal)} with Paystack`}
             >
               {busy ? (
                 <ActivityIndicator color={colors.onNavy} />
               ) : (
                 <>
                   <Ionicons name="lock-closed" size={15} color={colors.onNavy} />
-                  <Text style={styles.ctaText}>Pay {formatNaira(summary.total)}</Text>
+                  <Text style={styles.ctaText}>Pay {formatNaira(payTotal)}</Text>
                 </>
               )}
             </Pressable>
@@ -597,6 +773,22 @@ const styles = StyleSheet.create({
   columnNarrow: { flex: 2 },
 
   form: { gap: spacing.lg },
+  saveRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  saveText: { fontSize: font.md, color: colors.text },
+
+  bundleLine: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    paddingBottom: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  bundleLineOff: { opacity: 0.6 },
+  bundleWho: { fontSize: font.md, fontWeight: '700', color: colors.text },
+  bundleShop: { fontSize: font.sm, color: colors.textMuted, marginTop: 1 },
+  bundleProblem: { fontSize: font.sm, color: colors.danger, marginTop: 2 },
+  struck: { textDecorationLine: 'line-through', color: colors.textFaint },
 
   summary: {
     backgroundColor: colors.surface,

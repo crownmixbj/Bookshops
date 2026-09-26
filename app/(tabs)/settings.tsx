@@ -20,7 +20,8 @@ import {
   SaveButton,
   Note,
 } from '../../components/settings/SettingsControls';
-import { StatePicker } from '../../components/settings/StatePicker';
+import { ChildrenSection } from '../../components/household/ChildrenSection';
+import { AddressBookSection } from '../../components/household/AddressBookSection';
 
 import { useLayout } from '../../hooks/useLayout';
 import { useSettings, type SaveState } from '../../hooks/useSettings';
@@ -60,12 +61,6 @@ export default function SettingsScreen() {
   // --- personal details form -----------------------------------
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
-  const [address, setAddress] = useState('');
-  const [city, setCity] = useState('');
-  const [deliveryState, setDeliveryState] = useState('');
-  const [lga, setLga] = useState('');
-  const [landmark, setLandmark] = useState('');
-  const [deliveryPhone, setDeliveryPhone] = useState('');
   const [personalState, setPersonalState] = useState<SaveState>('idle');
 
   // --- vendor form ---------------------------------------------
@@ -108,12 +103,6 @@ export default function SettingsScreen() {
     if (!profile) return;
     setFullName(profile.full_name ?? '');
     setPhone(profile.phone_number ?? '');
-    setAddress(profile.default_delivery_address ?? '');
-    setCity(profile.default_delivery_city ?? '');
-    setDeliveryState(profile.default_delivery_state ?? '');
-    setLga(profile.default_delivery_lga ?? '');
-    setLandmark(profile.default_delivery_landmark ?? '');
-    setDeliveryPhone(profile.default_delivery_phone ?? '');
   }, [profile]);
 
   useEffect(() => {
@@ -146,15 +135,13 @@ export default function SettingsScreen() {
 
   const savePersonal = () =>
     runSave(setPersonalState, async () => {
+      // Name and phone only. The delivery defaults now belong to the
+      // address book, which mirrors its default onto the profile in the
+      // database — writing a copy from this form as well would overwrite
+      // that with whatever this screen loaded, however stale.
       const ok = await updateProfile({
         full_name: fullName.trim(),
         phone_number: phone.trim() || null,
-        default_delivery_address: address.trim() || null,
-        default_delivery_city: city.trim() || null,
-        default_delivery_state: deliveryState.trim() || null,
-        default_delivery_lga: lga.trim() || null,
-        default_delivery_landmark: landmark.trim() || null,
-        default_delivery_phone: deliveryPhone.trim() || null,
       });
       // The header lives in AppShell, which never unmounts, so it will
       // not pick up a new name on its own.
@@ -275,58 +262,15 @@ export default function SettingsScreen() {
                   />
                 </Section>
 
-                {/* ---- delivery -------------------------------- */}
-                {!isVendor && (
-                  <Section
-                    title="Default Delivery Address"
-                    caption="Used to prefill checkout"
-                    icon="location-outline"
-                    footer={<SaveButton onPress={savePersonal} state={personalState} />}
-                  >
-                    <Field
-                      label="Street address"
-                      value={address}
-                      onChangeText={setAddress}
-                      placeholder="14 Adeniyi Jones Avenue"
-                    />
-                    <Field
-                      label="City or town"
-                      value={city}
-                      onChangeText={setCity}
-                      placeholder="Ikeja"
-                    />
-                    <StatePicker
-                      label="State"
-                      value={deliveryState}
-                      onChange={setDeliveryState}
-                    />
-                    <Field
-                      label="Local Government Area"
-                      value={lga}
-                      onChangeText={setLga}
-                      placeholder="Ikeja LGA"
-                    />
-                    {/* The field that actually gets the parcel delivered.
-                        Outside the main estates an address here is found
-                        by landmark, not by street number. */}
-                    <Field
-                      label="Nearest landmark"
-                      value={landmark}
-                      onChangeText={setLandmark}
-                      placeholder="Opposite Ikeja City Mall"
-                    />
-                    <Field
-                      label="Delivery phone"
-                      value={deliveryPhone}
-                      onChangeText={setDeliveryPhone}
-                      placeholder="Someone who can receive the parcel"
-                      keyboardType="phone-pad"
-                    />
-                    <Note>
-                      Each order keeps its own copy of the address it was sent to, so
-                      changing this never rewrites where past orders went.
-                    </Note>
-                  </Section>
+                {/* ---- household ------------------------------- */}
+                {/* Buyers only. The single "Default Delivery Address"
+                    form this replaces lives on as the address book's
+                    default entry, mirrored onto the profile. */}
+                {!isVendor && !isAdmin && (
+                  <>
+                    <ChildrenSection highlight={section === 'children'} />
+                    <AddressBookSection defaultName={profile.full_name} />
+                  </>
                 )}
 
                 {/* ---- vendor ---------------------------------- */}

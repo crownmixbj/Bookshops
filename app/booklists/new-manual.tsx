@@ -17,6 +17,8 @@ import {
   ConfirmAccuracyCheckbox,
 } from '../../components/booklists/ConfirmAccuracy';
 import { supabase } from '../../utils/supabase';
+import { ChildPicker } from '../../components/household/ChildPicker';
+import type { Child } from '../../types/db';
 import {
   DRAFT_STATUS,
   describeBooklistError,
@@ -105,6 +107,8 @@ export default function NewBooklistScreen() {
   const [photo, setPhoto] = useState<PickedImage | null>(null);
   const [picking, setPicking] = useState(false);
   const [classLevel, setClassLevel] = useState('');
+  /** Which child the list is for. Null = not labelled with a child. */
+  const [child, setChild] = useState<Child | null>(null);
   const [lines, setLines] = useState<DraftLine[]>([blankLine()]);
   const gate = useAuthGate();
   /**
@@ -373,6 +377,9 @@ export default function NewBooklistScreen() {
           school_name: school.trim(),
           class_level: classLevel.trim(),
           status: DRAFT_STATUS,
+          // Only sent when chosen, so a project that has not run
+          // bookshops_buyer_portal.sql never sees an unknown column.
+          ...(child ? { child_id: child.id } : {}),
         })
         .select('id')
         .single();
@@ -561,6 +568,24 @@ export default function NewBooklistScreen() {
       </Panel>
 
       <Panel title="School Details">
+        {gate.signedIn && (
+          <ChildPicker
+            value={child?.id ?? null}
+            disabled={saving}
+            onChange={(next) => {
+              // Fill from the child only where the field is empty or
+              // still holds the previous child's value.
+              const prev = child;
+              if (next?.school_name && (!school.trim() || school === (prev?.school_name ?? ''))) {
+                setSchool(next.school_name);
+              }
+              if (next?.class_level && (!classLevel.trim() || classLevel === (prev?.class_level ?? ''))) {
+                setClassLevel(next.class_level);
+              }
+              setChild(next);
+            }}
+          />
+        )}
         <Field
           label="School"
           placeholder="e.g. Ise Oluwa School"

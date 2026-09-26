@@ -42,6 +42,10 @@ export interface DraftLine {
 }
 
 export function badgeFor(row: VendorQueueRow): QueueBadge {
+  // Rows only reach the queue while the shop can still act on them, so a
+  // quote the customer declined never gets here (see loadQueue). Before
+  // that was true, a declined quote fell through to the last line and
+  // came back badged "New Request".
   if (row.my_quote_status === 'accepted') return 'accepted';
   if (row.my_quote_status === 'sent') return 'sent';
   if (row.my_quote_status === 'draft') return 'processing';
@@ -121,7 +125,13 @@ export function useVendorDashboard() {
 
       const { data, error: queueError } = await supabase.rpc('vendor_request_queue');
       if (queueError) throw queueError;
-      setQueue((data ?? []) as VendorQueueRow[]);
+      // A quote the customer declined is a finished offer, not work to do.
+      // vendor_request_queue() already leaves those requests out
+      // (bookshops_quote_decline_closes_offer.sql); this is the backstop
+      // for a database where that has not been run yet.
+      setQueue(
+        ((data ?? []) as VendorQueueRow[]).filter((r) => r.my_quote_status !== 'rejected')
+      );
     } catch (e) {
       setError(e as Error);
     } finally {

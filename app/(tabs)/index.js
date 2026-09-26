@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -14,11 +14,12 @@ import { router } from 'expo-router';
 import { ActiveBooklists } from '../../components/dashboard/ActiveBooklists';
 import { CreateBooklistModal } from '../../components/CreateBooklistModal';
 import { BooklistReviewModal } from '../../components/booklists/BooklistReviewModal';
-import { CreateBooklist } from '../../components/dashboard/CreateBooklist';
 import { HeroBanner } from '../../components/dashboard/HeroBanner';
+import { WelcomeRow } from '../../components/dashboard/WelcomeRow';
 import { PendingQuotes } from '../../components/dashboard/PendingQuotes';
 import { FeaturedShops } from '../../components/dashboard/FeaturedShops';
-import { OrderSummary } from '../../components/dashboard/OrderSummary';
+import { PromoCard } from '../../components/dashboard/PromoCard';
+import { useDashboardPromo } from '../../hooks/useDashboardPromo';
 
 import { useLayout } from '../../hooks/useLayout';
 import { useDashboardData } from '../../hooks/useDashboardData';
@@ -28,7 +29,7 @@ import { SignInPrompt } from '../../components/auth/SignInPrompt';
 import { getSessionUserId, subscribeToAuthReloads } from '../../lib/loadState';
 import { loadGuestDraft, draftHasContent } from '../../lib/guestDraft';
 import { MANUAL_BOOKLIST_ROUTE } from '../../hooks/useCreateBooklist';
-import { colors, spacing, radius, font, typography } from '../../theme';
+import { colors, spacing, radius, font } from '../../theme';
 import { Footer } from '../../components/layout/Footer';
 
 /**
@@ -41,12 +42,6 @@ import { Footer } from '../../components/layout/Footer';
  */
 export default function DashboardScreen() {
   const { isDesktop, isMobile, contentPadding } = useLayout();
-
-  /**
-   * Per-item checkbox state, keyed by item id. Absent = checked, so a
-   * newly loaded booklist arrives fully selected without seeding state.
-   */
-  const [selection, setSelection] = useState({});
 
   /**
    * The create flow. Shared with My Booklists so both screens offer the
@@ -100,8 +95,6 @@ export default function DashboardScreen() {
       alive = false;
     };
   }, [userId, created]);
-  const toggleItem = (id) =>
-    setSelection((prev) => ({ ...prev, [id]: prev[id] === false ? true : false }));
 
   const {
     displayName,
@@ -118,19 +111,31 @@ export default function DashboardScreen() {
     diagnostics,
   } = useDashboardData();
 
-  // Order total recomputed from the visible checkboxes, so unticking a
-  // book updates the summary immediately.
-  const { total, itemCount } = useMemo(() => {
-    const items = activeRequests?.[0]?.items ?? [];
-    const chosen = items.filter((i) => selection[i.id] !== false);
-    return {
-      itemCount: chosen.length,
-      total: chosen.reduce(
-        (sum, i) => sum + (Number(i.unit_price) || 0) * (Number(i.quantity) || 1),
-        0
-      ),
-    };
-  }, [activeRequests, selection]);
+  // ---- the right-hand slot ----------------------------------------
+  // Permanent. It used to toggle between an Order Summary and a promo,
+  // but checkout happens per quote (or as a household bundle from My
+  // Booklists), so a running total here was a second, weaker checkout.
+  // useDashboardPromo guarantees there is always something to show:
+  // a paid deal, else a top-rated shop, else LOCI's own card. The shop
+  // already in "Featured Shops" is skipped so the page never repeats it.
+  const { promo, loading: promoLoading } = useDashboardPromo(featuredShop?.id ?? null);
+
+  const runPromo = (p) => {
+    const a = p.cta.action;
+    if (a.type === 'requestQuote') {
+      router.push({
+        pathname: MANUAL_BOOKLIST_ROUTE,
+        // The same direct-to-one-shop flow a shop's own page uses: the
+        // list is published to this shop only.
+        params: { vendor: a.vendorId, shop: a.shopName },
+      });
+    } else if (a.type === 'createBooklist') {
+      create.open();
+    } else {
+      router.push(a.route);
+    }
+  };
+  const openPromoLink = (route) => router.push(route);
 
   // The navy hero tile is the only way to start a booklist from this
   // screen, and it opens the same CreateBooklistModal My Booklists
@@ -141,22 +146,10 @@ export default function DashboardScreen() {
   // whether the app is any use to them.
   const handleCreateNew = create.open;
 
-  // `orders` does have an insert policy, an amount column and the
-  // delivery fields — what is missing is the payment provider and a
-  // quote to charge against. /checkout says exactly that instead of
-  // pretending to collect card details.
-  const handleCheckout = () =>
-    gate.requireAuth(
-      () => router.push('/checkout'),
-      'Log in to check out and pay for this order.'
-    );
-
   const mainColumn = (
     <View style={styles.colGap}>
       <ActiveBooklists
         requests={activeRequests}
-        selection={selection}
-        onToggleItem={toggleItem}
         loading={loading}
         // The row still expands in place; this opens the full
         // breakdown with the quotes, which the hub card has no room
@@ -186,7 +179,17 @@ export default function DashboardScreen() {
 
   const sideColumn = (
     <View style={styles.colGap}>
-      <CreateBooklist onCapture={handleCreateNew} />
+      {/* Below desktop there is no right-hand rail, so the promo
+          slot opens this column instead. */}
+      {!isDesktop && (
+        <PromoCard
+          promo={promo}
+          loading={promoLoading}
+          variant="inline"
+          onAction={runPromo}
+          onLink={openPromoLink}
+        />
+      )}
       <FeaturedShops
         shop={featuredShop}
         // No id means there is no shop to open — the card is showing
@@ -218,13 +221,11 @@ export default function DashboardScreen() {
             onBrowse={() => router.push('/shops')}
           />
 
-          <View style={styles.heading}>
-            {/* The hero already says what this page is for, so the old
-                "Booklist Hub" title underneath it was the same statement
-                twice. What is left is the one thing the hero cannot
-                carry, because it is different for every person. */}
-            <Text style={styles.h2}>Welcome back, {displayName}</Text>
-          </View>
+          {/* The greeting was a bare muted line wedged between the hero
+              and the first card. It is the one thing on the page that is
+              different for every person, so it gets a row of its own —
+              and the empty half of that row is where the mobile apps go. */}
+          <WelcomeRow displayName={displayName} />
 
           {error && (
             <Banner
@@ -279,13 +280,15 @@ export default function DashboardScreen() {
         </ScrollView>
 
         {isDesktop && (
-          <OrderSummary total={total} itemCount={itemCount} onCheckout={handleCheckout} loading={loading} />
+          <PromoCard
+            promo={promo}
+            loading={promoLoading}
+            variant="column"
+            onAction={runPromo}
+            onLink={openPromoLink}
+          />
         )}
       </View>
-
-      {!isDesktop && (
-        <OrderSummary total={total} itemCount={itemCount} onCheckout={handleCheckout} loading={loading} />
-      )}
 
       <SignInPrompt
         visible={gate.promptVisible}
@@ -390,14 +393,6 @@ const styles = StyleSheet.create({
     maxWidth: CONTENT_MAX_WIDTH,
     alignSelf: 'center',
   },
-
-  // marginTop as well now: the hero sits directly above this, and
-  // scrollContent has no gap of its own.
-  heading: { marginTop: spacing.lg, marginBottom: spacing.lg },
-  // h1 went with the "Booklist Hub" title the hero replaced.
-  // The one line on the page that is different for every person.
-  // 15/500/#334155 — a secondary heading, not body copy.
-  h2: { ...typography.heading },
 
   columns: { flexDirection: 'row', gap: spacing.lg, alignItems: 'flex-start', width: '100%' },
   mainCol: { flex: 1.55, minWidth: 300 },

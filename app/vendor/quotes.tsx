@@ -19,7 +19,7 @@ import { WorkspaceFooter } from '../../components/layout/WorkspaceFooter';
 import { useShell } from '../../components/layout/ShellContext';
 
 import { useLayout } from '../../hooks/useLayout';
-import { useVendorQuotes, stateFor, isEditable } from '../../hooks/useVendorQuotes';
+import { useVendorQuotes, stateFor, isEditable, declinedBy } from '../../hooks/useVendorQuotes';
 import { useVendorDashboard } from '../../hooks/useVendorDashboard';
 import { colors, spacing, radius, font, shadow, formatNaira } from '../../theme';
 import type { VendorQuoteRow, VendorQuoteState, VendorQuoteTab } from '../../types/db';
@@ -230,6 +230,12 @@ export default function VendorQuotesScreen() {
               request={selected}
               lines={lines}
               imagePath={imagePath}
+              vendorId={vendor?.id ?? null}
+              onLumpSumSaved={(status) => {
+                refresh();
+                refreshQueue();
+                if (status === 'sent') closeRequest();
+              }}
               totals={totals}
               loading={loadingDetail}
               saving={busySaving}
@@ -361,6 +367,7 @@ function QuoteCard({
   const state = stateFor(row);
   const copy = STATE_COPY[state];
   const short = row.quoted_item_count !== row.requested_item_count;
+  const endedBy = declinedBy(row);
 
   return (
     <View style={styles.card}>
@@ -381,6 +388,26 @@ function QuoteCard({
               <Ionicons name={copy.icon} size={11} color={copy.fg} />
               <Text style={[styles.chipText, { color: copy.fg }]}>{copy.label}</Text>
             </View>
+            {/* "Declined" alone does not say by whom, and the three
+                endings are not the same news: a buyer saying no is a
+                lost job worth reading about, a withdrawal is the shop's
+                own doing, and an expiry is a job they were too slow to
+                answer. */}
+            {endedBy === 'buyer' && (
+              <View style={[styles.chip, { backgroundColor: '#FCEAE8' }]}>
+                <Text style={[styles.chipText, { color: colors.danger }]}>By the customer</Text>
+              </View>
+            )}
+            {endedBy === 'shop' && (
+              <View style={[styles.chip, { backgroundColor: colors.surfaceMuted }]}>
+                <Text style={[styles.chipText, { color: colors.textMuted }]}>You withdrew it</Text>
+              </View>
+            )}
+            {endedBy === 'expired' && (
+              <View style={[styles.chip, { backgroundColor: colors.warningBg }]}>
+                <Text style={[styles.chipText, { color: colors.warning }]}>Expired unanswered</Text>
+              </View>
+            )}
             {row.is_targeted && (
               <View style={[styles.chip, { backgroundColor: '#E4EAF5' }]}>
                 <Ionicons name="storefront-outline" size={11} color={colors.navy} />
@@ -398,14 +425,31 @@ function QuoteCard({
           </View>
 
           <Text style={styles.items}>
-            {row.quoted_item_count} of {row.requested_item_count} item
-            {row.requested_item_count === 1 ? '' : 's'} quoted
+            {/* A photo-only booklist has no lines to count; it was quoted
+                with one total and the shop's priced sheet. */}
+            {row.requested_item_count === 0
+              ? 'Photo booklist · quoted as one total'
+              : `${row.quoted_item_count} of ${row.requested_item_count} item${
+                  row.requested_item_count === 1 ? '' : 's'
+                } quoted`}
             {/* Spelt out because it is the usual reason a buyer picks
                 someone else, and the shop should see it here. */}
             {short && row.unavailable_count > 0
               ? ` · ${row.unavailable_count} marked out of stock`
               : ''}
           </Text>
+
+          {/* Why the customer said no, on the card itself rather than
+              only inside View Sent Quote: it is the one thing on a
+              declined quote worth reading. */}
+          {endedBy === 'buyer' && (
+            <View style={styles.declineBox}>
+              <Text style={styles.declineLabel}>Customer's reason</Text>
+              <Text style={row.decline_reason ? styles.declineReason : styles.declineNone}>
+                {row.decline_reason ? `“${row.decline_reason}”` : 'They did not say why.'}
+              </Text>
+            </View>
+          )}
         </View>
 
         <View style={compact ? styles.totalMobile : styles.total}>
@@ -484,6 +528,15 @@ function EmptyState({ hasAny, tab }: { hasAny: boolean; tab: VendorQuoteTab }) {
 }
 
 const styles = StyleSheet.create({
+  declineBox: {
+    marginTop: spacing.sm,
+    padding: spacing.sm,
+    borderRadius: radius.sm,
+    backgroundColor: '#FCEAE8',
+  },
+  declineLabel: { fontSize: font.xs, fontWeight: '800', color: colors.danger },
+  declineReason: { fontSize: font.sm, color: colors.text, marginTop: 2, lineHeight: 18 },
+  declineNone: { fontSize: font.sm, color: colors.textMuted, marginTop: 2 },
   scroll: { flex: 1 },
   scrollContent: { paddingBottom: spacing.xxl },
 

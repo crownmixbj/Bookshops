@@ -1,6 +1,9 @@
 import { useState } from 'react';
 import { View, Text, Pressable, Linking, ActivityIndicator, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { router } from 'expo-router';
+import { supabase } from '../../utils/supabase';
+import { ConfirmDialog } from '../booklists/ConfirmDialog';
 import type { OrderView, PaymentStatus, TrackerStage } from '../../types/db';
 import { SETTLED_PAYMENT_STATUSES } from '../../types/db';
 import { downloadInvoice } from '../../lib/invoice';
@@ -128,14 +131,59 @@ interface Props {
   order: OrderView;
   defaultExpanded?: boolean;
   onDispute: (order: OrderView) => void;
+  /** Called after the buyer confirms receipt, so the list can re-read. */
+  onChanged?: () => void;
+  /** Outlined briefly — the order a notification or message linked to. */
+  highlight?: boolean;
 }
 
-export function OrderCard({ order, defaultExpanded = false, onDispute }: Props) {
+/**
+ * Can the buyer release this order's escrow?
+ *
+ * Only while money is actually held, and never for a cancelled order —
+ * that is a refund conversation, not a release. The database enforces
+ * the same rule (confirm_order_receipt); this only decides what to show.
+ */
+function canConfirmReceipt(order: OrderView): boolean {
+  return order.payment_status === 'escrow_held' && !order.isCancelled;
+}
+
+export function OrderCard({ order, defaultExpanded = false, onDispute, onChanged, highlight }: Props) {
   const [open, setOpen] = useState(defaultExpanded);
   const [invoicing, setInvoicing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
 
   const total = order.amount ?? order.itemsTotal;
+  const shop = order.vendor?.store_name ?? 'the shop';
+  const releasable = canConfirmReceipt(order);
+  // The shop says it has arrived, or it is on its way: this is the
+  // moment to ask. Before dispatch the button still exists (a parent
+  // may have collected in person) but is not pushed at them.
+  const receiptDue = releasable && (order.fulfillment_status === 'dispatched' || order.fulfillment_status === 'delivered');
+
+  async function confirmReceipt() {
+    setConfirming(true);
+    setConfirmError(null);
+    const { error } = await supabase.rpc('confirm_order_receipt', { p_order_id: order.id });
+    setConfirming(false);
+    if (error) {
+      const missing = ['42883', 'PGRST202'].includes(error.code ?? '');
+      setConfirmError(
+        missing
+          ? 'Confirming receipt is not switched on yet — bookshops_buyer_portal.sql needs to be run.'
+          : error.message
+      );
+      return;
+    }
+    setConfirmOpen(false);
+    onChanged?.();
+  }
+
+  const openMessages = () =>
+    router.push({ pathname: '/messages', params: { quote: order.quote_id } });
 
   async function handleInvoice() {
     setInvoicing(true);
@@ -152,7 +200,7 @@ export function OrderCard({ order, defaultExpanded = false, onDispute }: Props) 
   }
 
   return (
-    <View style={styles.card}>
+    <View style={[styles.card, highlight && styles.cardHighlight]}>
       <Pressable
         onPress={() => setOpen((v) => !v)}
         style={styles.head}
@@ -200,6 +248,37 @@ export function OrderCard({ order, defaultExpanded = false, onDispute }: Props) 
       <View style={styles.trackerWrap}>
         <Tracker stages={order.stages} cancelled={order.isCancelled} />
       </View>
+
+      {/* --- escrow: the buyer's one lever on the money ----------- */}
+      {receiptDue && (
+        <View style={styles.receipt}>
+          <Ionicons name="shield-checkmark" size={18} color={colors.success} />
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={styles.receiptTitle}>
+              {order.fulfillment_status === 'delivered' ? 'Did everything arrive?' : 'On its way to you'}
+            </Text>
+            <Text style={styles.receiptBody}>
+              {formatNaira(total)} is held in LOCI Escrow. Confirm once you have checked the books and it
+              is released to {shop}. If something is wrong, report it instead.
+            </Text>
+          </View>
+          <Action
+            icon="checkmark-circle-outline"
+            label="Confirm receipt"
+            tone="primary"
+            onPress={() => setConfirmOpen(true)}
+          />
+        </View>
+      )}
+      {order.payment_status === 'escrow_released' && (
+        <View style={[styles.receipt, styles.receiptDone]}>
+          <Ionicons name="checkmark-done-circle" size={18} color={colors.success} />
+          <Text style={[styles.receiptBody, { flex: 1 }]}>
+            You confirmed receipt{order.escrow_released_at ? ` on ${shortDate(order.escrow_released_at)}` : ''}.
+            Payment has been released to {shop}.
+          </Text>
+        </View>
+      )}
 
       {open && (
         <View style={styles.body}>
@@ -335,6 +414,15 @@ export function OrderCard({ order, defaultExpanded = false, onDispute }: Props) 
           )}
 
           <View style={styles.actions}>
+            {releasable && !receiptDue && (
+              <Action
+                icon="checkmark-circle-outline"
+                label="I've received these books"
+                tone="primary"
+                onPress={() => setConfirmOpen(true)}
+              />
+            )}
+            <Action icon="chatbubbles-outline" label="Message shop" onPress={openMessages} />
             <Action
               icon="download-outline"
               label={invoicing ? 'Preparing…' : 'Download invoice'}
@@ -350,6 +438,26 @@ export function OrderCard({ order, defaultExpanded = false, onDispute }: Props) 
           </View>
         </View>
       )}
+
+      <ConfirmDialog
+        visible={confirmOpen}
+        title="Confirm you received your books?"
+        message={
+          (order.fulfillment_status === 'processing' || order.fulfillment_status === 'ready'
+            ? `${shop} has not marked this order as dispatched yet. Only confirm if the books are already in your hands. `
+            : '') +
+          `This releases ${formatNaira(total)} from escrow to ${shop} and cannot be undone. ` +
+          'If anything is missing or damaged, cancel and use "Report a problem" instead.' +
+          (confirmError ? `\n\n${confirmError}` : '')
+        }
+        confirmLabel="Yes, release payment"
+        busy={confirming}
+        onConfirm={confirmReceipt}
+        onCancel={() => {
+          setConfirmOpen(false);
+          setConfirmError(null);
+        }}
+      />
     </View>
   );
 }
@@ -364,7 +472,22 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     ...shadow.card,
   },
+  cardHighlight: { borderColor: colors.orange, borderWidth: 2 },
   head: { flexDirection: 'row', gap: spacing.md, padding: spacing.lg, alignItems: 'flex-start' },
+  receipt: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: spacing.md,
+    backgroundColor: '#EAF6EF',
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  receiptDone: { backgroundColor: '#F2F8F4' },
+  receiptTitle: { fontSize: font.md, fontWeight: '700', color: colors.text },
+  receiptBody: { fontSize: font.sm, color: colors.textMuted, lineHeight: 18, marginTop: 1 },
   reference: { fontSize: font.xs, fontWeight: '800', color: colors.textFaint, letterSpacing: 0.5 },
   vendor: { fontSize: font.md, fontWeight: '700', color: colors.text, marginTop: 2 },
   meta: { fontSize: font.sm, color: colors.textMuted, marginTop: 1 },

@@ -87,15 +87,20 @@ export async function loadCheckoutSummary(quoteId: string): Promise<CheckoutSumm
   } as CheckoutSummary;
 }
 
-/** Where Paystack should send the buyer back to. */
-function callbackUrl(quoteId: string): string {
+/**
+ * Where Paystack should send the buyer back to.
+ *
+ * `key` is 'quote' for a single quote and 'quotes' for a bundle (a
+ * comma-separated list), matching the params /checkout reads.
+ */
+function callbackUrl(value: string, key: 'quote' | 'quotes' = 'quote'): string {
   if (Platform.OS === 'web') {
     // Paystack appends ?trxref=&reference= to whatever is here, so the
     // quote id has to survive as a query parameter of our own.
-    return `${window.location.origin}/checkout?quote=${encodeURIComponent(quoteId)}`;
+    return `${window.location.origin}/checkout?${key}=${encodeURIComponent(value)}`;
   }
   // bookshops://checkout — the scheme is set in app.json.
-  return Linking.createURL('/checkout', { queryParams: { quote: quoteId } });
+  return Linking.createURL('/checkout', { queryParams: { [key]: value } });
 }
 
 /**
@@ -257,6 +262,138 @@ export async function simulatePayment(
   }
   if (!data) return { status: 'failed', message: 'No order was created.' };
   return { status: 'paid', orderId: data as string };
+}
+
+/* ------------------------------------------------------------------ */
+/* Bundles: several accepted quotes, one charge                        */
+/* ------------------------------------------------------------------ */
+
+/** Why a line cannot be paid for, as checkout_bundle() reports it. */
+export type BundleProblem = 'not_found' | 'not_open' | 'already_paid' | 'booklist_ordered' | 'duplicate_booklist';
+
+export interface BundleLine {
+  quote_id: string;
+  request_id: string;
+  vendor_id: string;
+  store_name: string | null;
+  school_name: string | null;
+  class_level: string | null;
+  child_name: string | null;
+  items_total: number;
+  /** Charged once per shop: on the first list from each shop, 0 on the rest. */
+  delivery_fee: number;
+  line_total: number;
+  problem: BundleProblem | null;
+}
+
+export interface BundleSummary {
+  lines: BundleLine[];
+  /** The payable lines' total — exactly what the charge will be. */
+  total: number;
+  itemsTotal: number;
+  deliveryTotal: number;
+  /** How many distinct shops will deliver. */
+  shopCount: number;
+}
+
+export const BUNDLE_PROBLEM_COPY: Record<BundleProblem, string> = {
+  not_found: 'This quote is no longer available to you.',
+  not_open: 'The shop has withdrawn or closed this quote.',
+  already_paid: 'Already paid for — see My Orders.',
+  booklist_ordered: 'This booklist has already been ordered from another shop.',
+  duplicate_booklist: 'Another quote for the same booklist is already in this checkout.',
+};
+
+/** Same numbers the charge will use — both come from bundle_lines() in Postgres. */
+export async function loadBundleSummary(quoteIds: string[]): Promise<BundleSummary> {
+  const { data, error } = await supabase.rpc('checkout_bundle', { p_quote_ids: quoteIds });
+  if (error) {
+    if (['42883', 'PGRST202'].includes(error.code ?? '')) {
+      throw new Error('Paying for several lists at once needs bookshops_buyer_portal.sql to be run on this project.');
+    }
+    throw new Error(error.message);
+  }
+  const rows = (data ?? []) as Record<string, any>[];
+  const lines: BundleLine[] = rows.map((r) => ({
+    quote_id: r.quote_id,
+    request_id: r.request_id,
+    vendor_id: r.vendor_id,
+    store_name: r.store_name ?? null,
+    school_name: r.school_name ?? null,
+    class_level: r.class_level ?? null,
+    child_name: r.child_name ?? null,
+    items_total: Number(r.items_total ?? 0),
+    delivery_fee: Number(r.delivery_fee ?? 0),
+    line_total: Number(r.line_total ?? 0),
+    problem: (r.problem ?? null) as BundleProblem | null,
+  }));
+  const payable = lines.filter((l) => !l.problem);
+  return {
+    lines,
+    total: Number(rows[0]?.bundle_total ?? 0),
+    itemsTotal: payable.reduce((s, l) => s + l.items_total, 0),
+    deliveryTotal: payable.reduce((s, l) => s + l.delivery_fee, 0),
+    shopCount: new Set(payable.map((l) => l.vendor_id)).size,
+  };
+}
+
+/** Start one Paystack charge for several quotes. Same flow as startPayment. */
+export async function startBundlePayment(
+  quoteIds: string[],
+  delivery: DeliveryDetails,
+): Promise<PaymentOutcome> {
+  const joined = quoteIds.join(',');
+  const { data, error } = await supabase.functions.invoke('paystack-initialize', {
+    body: { quote_ids: quoteIds, delivery, callback_url: callbackUrl(joined, 'quotes') },
+  });
+
+  if (error) {
+    const detail = await readFunctionError(error);
+    return { status: 'failed', message: detail ?? 'We could not start that payment.' };
+  }
+
+  const authorizationUrl = data?.authorization_url as string | undefined;
+  const reference = data?.reference as string | undefined;
+  if (!authorizationUrl || !reference) {
+    return { status: 'failed', message: 'Paystack did not return a checkout page.' };
+  }
+
+  await rememberReference(reference);
+
+  if (Platform.OS === 'web') {
+    window.location.assign(authorizationUrl);
+    return { status: 'awaiting_return', reference };
+  }
+
+  const opened = await Linking.canOpenURL(authorizationUrl);
+  if (!opened) return { status: 'failed', message: 'No browser could open the payment page.' };
+  await Linking.openURL(authorizationUrl);
+  return { status: 'awaiting_return', reference };
+}
+
+/** The development shortcut for a bundle. Refused unless allow_test_payments is on. */
+export async function simulateBundlePayment(
+  quoteIds: string[],
+  delivery: DeliveryDetails,
+): Promise<PaymentOutcome> {
+  const { data, error } = await supabase.rpc('simulate_escrow_bundle', {
+    p_quote_ids: quoteIds,
+    p_delivery_name: delivery.name,
+    p_delivery_phone: delivery.phone,
+    p_delivery_address: delivery.address,
+    p_delivery_city: delivery.city,
+    p_delivery_state: delivery.state ?? null,
+    p_delivery_notes: delivery.notes ?? null,
+  });
+
+  if (error) {
+    const hint = (error as { hint?: string | null }).hint;
+    return { status: 'failed', message: [error.message, hint].filter(Boolean).join(' — ') };
+  }
+  const row = Array.isArray(data) ? data[0] : data;
+  const first = (row?.order_ids as string[] | undefined)?.[0];
+  if (!first) return { status: 'failed', message: 'No orders were created.' };
+  return { status: 'paid', orderId: first };
 }
 
 /** Pull the function's own message out of a FunctionsHttpError. */

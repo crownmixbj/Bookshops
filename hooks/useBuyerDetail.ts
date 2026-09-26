@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '../utils/supabase';
 import { pickPricingQuote, priceBooklistItems } from '../lib/booklistPricing';
+import { parseResponseFiles } from '../lib/quoteFiles';
+import { compareForBuyer } from '../lib/quoteNavigation';
 import type { PricedLineFields, Quote, QuoteItem } from '../types/db';
 
 /**
@@ -156,13 +158,38 @@ export interface BooklistQuote {
   total_price: number;
   status: string;
   created_at: string;
+  /** 'itemised' or 'lump_sum'. A lump-sum quote's breakdown is an attachment. */
+  pricing_mode: string | null;
+  vendor_note: string | null;
+  /** quotes.response_files, unparsed. Use parseResponseFiles() on it. */
+  response_files: unknown;
   vendors: { id: string; store_name: string; city: string | null } | null;
+}
+
+/**
+ * A quote with the few figures a buyer needs to compare it against the
+ * one below it, resolved here rather than on the screen.
+ *
+ * The point of these three numbers: a total on its own is not
+ * comparable. A shop that is ₦2,000 cheaper because it cannot get two
+ * of the titles is more expensive, and the only way the buyer can see
+ * that before opening each quote in turn is if the list says so.
+ */
+export interface ComparableQuote extends BooklistQuote {
+  /** Lines this shop priced and can supply. */
+  availableCount: number;
+  /** Lines it kept on the quote but marked out of stock. */
+  unavailableCount: number;
+  /** Pages the shop attached — a photographed or scanned priced sheet. */
+  fileCount: number;
+  /** Still open: the buyer can accept or decline it. */
+  isLive: boolean;
 }
 
 export function useBooklistDetail(requestId: string | null) {
   const [request, setRequest] = useState<any>(null);
   const [items, setItems] = useState<BooklistItem[]>([]);
-  const [quotes, setQuotes] = useState<BooklistQuote[]>([]);
+  const [quotes, setQuotes] = useState<ComparableQuote[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -201,7 +228,10 @@ export function useBooklistDetail(requestId: string | null) {
         .order('position', { ascending: true }),
       supabase
         .from('quotes')
-        .select('id, vendor_id, total_price, status, created_at, vendors ( id, store_name, city )')
+        .select(
+          'id, vendor_id, total_price, status, created_at, pricing_mode, vendor_note, ' +
+            'response_files, vendors ( id, store_name, city )'
+        )
         .eq('request_id', requestId)
         .order('total_price', { ascending: true }),
     ]);
@@ -211,9 +241,49 @@ export function useBooklistDetail(requestId: string | null) {
     const visibleQuotes = quoteRes.error
       ? []
       : ((quoteRes.data ?? []) as unknown as BooklistQuote[]).filter((q) => q.status !== 'draft');
-    setQuotes(visibleQuotes);
 
     const rows = itemRes.error ? [] : ((itemRes.data ?? []) as BooklistItemRow[]);
+
+    /*
+     * Coverage per quote, for the comparison list.
+     *
+     * One query for every quote on the request rather than one each: a
+     * booklist with five quotes would otherwise be five round trips on
+     * a phone, to draw a line of small grey text. Only quote_id and
+     * is_available are selected because that is all the counting needs;
+     * the prices are read per quote on the quote screen.
+     */
+    const counts = new Map<string, { available: number; unavailable: number }>();
+    if (visibleQuotes.length) {
+      const { data: coverage } = await supabase
+        .from('quote_items')
+        .select('quote_id, is_available')
+        .in('quote_id', visibleQuotes.map((q) => q.id));
+      for (const row of (coverage ?? []) as { quote_id: string; is_available: boolean }[]) {
+        const c = counts.get(row.quote_id) ?? { available: 0, unavailable: 0 };
+        if (row.is_available) c.available += 1;
+        else c.unavailable += 1;
+        counts.set(row.quote_id, c);
+      }
+    }
+
+    const comparable: ComparableQuote[] = visibleQuotes
+      .map((q) => {
+        const c = counts.get(q.id) ?? { available: 0, unavailable: 0 };
+        return {
+          ...q,
+          availableCount: c.available,
+          unavailableCount: c.unavailable,
+          fileCount: parseResponseFiles(q.response_files).length,
+          isLive: q.status === 'sent',
+        };
+      })
+      // Live offers first, cheapest first within them. A declined quote
+      // must not sit above one the buyer can still accept, however
+      // little it cost.
+      .sort(compareForBuyer);
+
+    setQuotes(comparable);
 
     // Line prices live on quote_items, not on the request rows. Without
     // this read every line here showed a dash while the quotes below it
@@ -271,6 +341,7 @@ export function useQuoteDetail(quoteId: string | null) {
       .from('quotes')
       .select(
         'id, request_id, vendor_id, total_price, status, created_at, item_breakdown, ' +
+          'pricing_mode, vendor_note, response_files, decline_reason, ' +
           'vendors ( id, store_name, city, rating, review_count ), ' +
           'book_requests ( id, school_name, class_level )'
       )

@@ -61,7 +61,8 @@ export interface CompressionResult {
 export async function compressBooklistImage(image: PickedImage): Promise<CompressionResult> {
   try {
     if (Platform.OS === 'web') return await compressWeb(image);
-    return compressNative(image);
+    // Awaited, so a native failure lands in the catch below.
+    return await compressNative(image);
   } catch (e) {
     console.warn('[booklist] compression failed, uploading the original:', e);
     return { image, compressed: false };
@@ -73,40 +74,50 @@ export async function compressBooklistImage(image: PickedImage): Promise<Compres
 /* ------------------------------------------------------------------ */
 
 /**
- * Native resizing is NOT implemented, and this returns the original.
+ * Native: resize and re-encode with expo-image-manipulator.
  *
- * There is no way to resize a bitmap in bare React Native without a
- * native module, and this project has real ios/ and android/ folders —
- * adding one means a rebuild, so it is not something to slip in under a
- * bug fix. What guards the native path meanwhile is the picker itself:
- * pickBooklistImage requests `quality: 0.6`, which is a real JPEG
- * re-encode performed by the OS before the file ever reaches us. It
- * caps quality but not DIMENSIONS, so a 12MP photo stays 12MP — usually
- * 1.5–3 MB rather than 4–8 MB.
+ * Same target as the web path: longest edge MAX_EDGE, JPEG at
+ * JPEG_QUALITY. HEIC comes out as JPEG too, which also means a buyer or
+ * shop on Android or the web can actually open it.
  *
- * TO FINISH THIS (one rebuild):
- *   npx expo install expo-image-manipulator
- *   then replace the body below with:
- *
- *     const { ImageManipulator, SaveFormat } = await import('expo-image-manipulator');
- *     const ref = ImageManipulator.manipulate(image.uri).resize({ width: MAX_EDGE });
- *     const out = await (await ref.renderAsync()).saveAsync({
- *       compress: JPEG_QUALITY,
- *       format: SaveFormat.JPEG,
- *     });
- *     return { image: { uri: out.uri, mimeType: 'image/jpeg',
- *                       fileName: toJpegName(image.fileName) }, compressed: true };
- *
- *   `resize({ width })` keeps the aspect ratio, so a portrait page is
- *   capped on its SHORT edge that way — pass `{ height: MAX_EDGE }`
- *   instead when the photo is taller than it is wide.
- *
- * Until then the timeout in the review modal is what stops a large
- * native photo from hanging the screen, which is the behaviour this
- * task was actually about.
+ * Imported lazily: it is a native module, and an app binary built before
+ * it was added does not contain it. On such a build this returns the
+ * original (the picker's own `quality: 0.6` re-encode still applies)
+ * rather than taking the upload down with it.
  */
-function compressNative(image: PickedImage): CompressionResult {
-  return { image, compressed: false };
+async function compressNative(image: PickedImage): Promise<CompressionResult> {
+  let mod: typeof import('expo-image-manipulator');
+  try {
+    mod = await import('expo-image-manipulator');
+  } catch {
+    return { image, compressed: false };
+  }
+  const { ImageManipulator, SaveFormat } = mod;
+
+  // Rendered once untouched to learn the dimensions, so the resize can
+  // cap the LONG edge. resize({ width }) alone would cap a portrait
+  // page on its short edge and leave it far larger than intended.
+  const original = await ImageManipulator.manipulate(image.uri).renderAsync();
+  const { width, height } = original;
+  const isHeic = /heic|heif/i.test(image.mimeType) || /\.hei[cf]$/i.test(image.fileName);
+  if (Math.max(width, height) <= MAX_EDGE && !isHeic) {
+    original.release?.();
+    return { image, compressed: false };
+  }
+
+  const context = ImageManipulator.manipulate(image.uri);
+  if (Math.max(width, height) > MAX_EDGE) {
+    context.resize(width >= height ? { width: MAX_EDGE } : { height: MAX_EDGE });
+  }
+  const resized = await context.renderAsync();
+  const out = await resized.saveAsync({ compress: JPEG_QUALITY, format: SaveFormat.JPEG });
+  original.release?.();
+  resized.release?.();
+
+  return {
+    image: { uri: out.uri, mimeType: 'image/jpeg', fileName: toJpegName(image.fileName) },
+    compressed: true,
+  };
 }
 
 /* ------------------------------------------------------------------ */

@@ -6,6 +6,33 @@ import { useBooklistDetail } from '../../hooks/useBuyerDetail';
 import { sumLineTotals } from '../../lib/booklistPricing';
 import { colors, spacing, radius, font, formatNaira } from '../../theme';
 
+/**
+ * How a quote that is no longer live reads on the comparison list.
+ *
+ * 'rejected' is shown as "You declined" rather than "Declined": on the
+ * buyer's own screen the passive voice hides who did it, and the buyer
+ * is the only one who can set this status.
+ */
+const QUOTE_STATE: Record<string, string> = {
+  accepted: 'Accepted',
+  rejected: 'You declined',
+  withdrawn: 'Shop withdrew it',
+  expired: 'Expired',
+};
+
+/** A small inline label. Sits beside a shop name, so it stays quiet. */
+function Tag({ label, tone = 'neutral' }: { label: string; tone?: 'neutral' | 'info' }) {
+  const t =
+    tone === 'info'
+      ? { bg: '#E4EAF5', fg: colors.navy }
+      : { bg: colors.surfaceMuted, fg: colors.textMuted };
+  return (
+    <View style={[styles.tag, { backgroundColor: t.bg }]}>
+      <Text style={[styles.tagText, { color: t.fg }]}>{label}</Text>
+    </View>
+  );
+}
+
 const STATUS_LABEL: Record<string, string> = {
   draft: 'Draft — not sent to vendors yet',
   pending_quote: 'Waiting for quotes',
@@ -57,6 +84,16 @@ export default function BooklistDetailScreen() {
   const awaiting = items.filter((i) => i.isAvailable && i.lineTotal == null).length;
   const outOfStock = items.filter((i) => !i.isAvailable).length;
   const estimate = sumLineTotals(items);
+
+  // Offers still open, and the cheapest of them. Matched by id rather
+  // than by taking the first row: the list is sorted live-first, so
+  // index 0 is only the cheapest overall when something live exists.
+  const live = quotes.filter((q) => q.isLive);
+  const liveCount = live.length;
+  const cheapestLive = live.length
+    ? live.reduce((a, b) => (Number(b.total_price) < Number(a.total_price) ? b : a))
+    : null;
+  const closedCount = quotes.length - liveCount;
 
   return (
     <BuyerPage
@@ -119,39 +156,121 @@ export default function BooklistDetailScreen() {
         )}
       </Panel>
 
-      <Panel title={`Quotes (${quotes.length})`}>
+      {/*
+        The comparison view.
+
+        This is where "Compare N quotes" lands, so it has to answer the
+        question the button asks — which of these should I take — rather
+        than just listing totals. Each row carries the two things that
+        change the answer: how many of the buyer's lines the shop can
+        actually supply, and whether the breakdown is an attachment
+        rather than itemised lines. Opening a row is the accept-or-
+        decline screen.
+      */}
+      <Panel
+        // Both numbers when both exist. "Quotes (2)" above five rows is
+        // the kind of small dishonesty that makes a buyer stop trusting
+        // the rest of the page.
+        title={
+          liveCount && closedCount
+            ? `Quotes (${liveCount} Open · ${closedCount} Closed)`
+            : `Quotes (${quotes.length})`
+        }
+        right={
+          cheapestLive ? (
+            <Text style={styles.estimate}>From {formatNaira(cheapestLive.total_price)}</Text>
+          ) : null
+        }
+      >
         {quotes.length === 0 ? (
           <Text style={styles.muted}>
             No shop has quoted on this booklist yet. Vendors usually respond within a few hours.
           </Text>
         ) : (
           <View>
-            {quotes.map((q, i) => (
-              <Pressable
-                key={q.id}
-                onPress={() => router.push(`/quotes/${q.id}`)}
-                style={({ pressed }) => [styles.row, i > 0 && styles.rowDivider, pressed && styles.rowPressed]}
-                accessibilityRole="button"
-                accessibilityLabel={`Quote from ${q.vendors?.store_name ?? 'a shop'}, ${formatNaira(q.total_price)}`}
-              >
-                <View style={styles.thumb}>
-                  <Text style={styles.thumbText}>
-                    {(q.vendors?.store_name ?? '?').slice(0, 1).toUpperCase()}
+            {liveCount > 1 && (
+              <Text style={[styles.muted, styles.compareHint]}>
+                The cheapest total is not always the best deal. Check how many of your{' '}
+                {items.length} line{items.length === 1 ? '' : 's'} each shop can actually supply
+                before you pay.
+              </Text>
+            )}
+
+            {quotes.map((q, i) => {
+              const priced = q.availableCount + q.unavailableCount;
+              const lowest = cheapestLive?.id === q.id && liveCount > 1;
+
+              return (
+                <Pressable
+                  key={q.id}
+                  onPress={() => router.push(`/quotes/${q.id}`)}
+                  style={({ pressed }) => [
+                    styles.row,
+                    i > 0 && styles.rowDivider,
+                    pressed && styles.rowPressed,
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    `${q.isLive ? 'Review the quote' : 'Open the closed quote'} from ` +
+                    `${q.vendors?.store_name ?? 'a shop'}, ${formatNaira(q.total_price)}`
+                  }
+                >
+                  <View style={[styles.thumb, !q.isLive && styles.thumbOff]}>
+                    <Text style={[styles.thumbText, !q.isLive && styles.thumbTextOff]}>
+                      {(q.vendors?.store_name ?? '?').slice(0, 1).toUpperCase()}
+                    </Text>
+                  </View>
+
+                  <View style={styles.rowText}>
+                    <View style={styles.nameRow}>
+                      <Text
+                        style={[styles.itemTitle, !q.isLive && styles.dim]}
+                        numberOfLines={1}
+                      >
+                        {q.vendors?.store_name ?? 'Shop'}
+                      </Text>
+                      {lowest && <Tag label="Lowest total" tone="info" />}
+                      {q.status !== 'sent' && <Tag label={QUOTE_STATE[q.status] ?? q.status} />}
+                    </View>
+
+                    <Text style={styles.itemMeta} numberOfLines={2}>
+                      {[
+                        q.vendors?.city ?? null,
+                        // A lump-sum quote has no lines to count, so
+                        // saying "0 of 12" would be a lie about the
+                        // shop rather than a fact about the quote.
+                        q.pricing_mode === 'lump_sum'
+                          ? 'Priced on the shop\'s own sheet'
+                          : priced > 0
+                            ? `Priced ${q.availableCount} of ${items.length} line${
+                                items.length === 1 ? '' : 's'
+                              }`
+                            : null,
+                        q.unavailableCount > 0
+                          ? `${q.unavailableCount} not available`
+                          : null,
+                        q.fileCount > 0
+                          ? `${q.fileCount} attachment${q.fileCount === 1 ? '' : 's'}`
+                          : null,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </Text>
+                  </View>
+
+                  <Text style={[styles.itemPrice, !q.isLive && styles.dim]}>
+                    {formatNaira(q.total_price)}
                   </Text>
-                </View>
-                <View style={styles.rowText}>
-                  <Text style={styles.itemTitle} numberOfLines={1}>
-                    {q.vendors?.store_name ?? 'Shop'}
-                  </Text>
-                  <Text style={styles.itemMeta}>
-                    {q.vendors?.city ?? '—'}
-                    {i === 0 && quotes.length > 1 ? ' · lowest' : ''}
-                  </Text>
-                </View>
-                <Text style={styles.itemPrice}>{formatNaira(q.total_price)}</Text>
-                <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
-              </Pressable>
-            ))}
+                  <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
+                </Pressable>
+              );
+            })}
+
+            <Text style={styles.footNote}>
+              {liveCount > 0
+                ? 'Open a quote to see every line, the shop\'s attachments, and to accept and pay or decline it.'
+                : 'These quotes are closed. Your booklist stays open, so other shops can still quote it.'}
+            </Text>
           </View>
         )}
       </Panel>
@@ -177,4 +296,23 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   thumbText: { fontSize: font.md, fontWeight: '800', color: colors.navy },
+  thumbOff: { backgroundColor: colors.surfaceMuted },
+  thumbTextOff: { color: colors.textFaint },
+
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, flexWrap: 'wrap' },
+  dim: { color: colors.textFaint },
+
+  tag: { borderRadius: radius.sm, paddingHorizontal: 6, paddingVertical: 2 },
+  tagText: { fontSize: font.xs, fontWeight: '700', letterSpacing: 0.3 },
+
+  compareHint: { marginBottom: spacing.sm },
+  footNote: {
+    fontSize: font.sm,
+    color: colors.textFaint,
+    lineHeight: 18,
+    marginTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    paddingTop: spacing.md,
+  },
 });

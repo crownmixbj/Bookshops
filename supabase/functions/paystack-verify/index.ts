@@ -38,23 +38,70 @@ Deno.serve(async (req) => {
       .maybeSingle();
 
     if (lookupError) return fail('Could not look that payment up.', 500);
-    if (!order) return fail('No order matches that payment reference.', 404);
-    if (order.buyer_id !== buyerId) return fail('That payment is not yours.', 403);
+
+    // Not an order's reference: a multi-list checkout's, perhaps. The
+    // group row carries the buyer and state; its orders are settled
+    // together by finalize_escrow_order below.
+    let owner: string | null = order?.buyer_id ?? null;
+    let alreadySettled = order ? ['escrow_held', 'escrow_released', 'paid'].includes(order.payment_status) : false;
+    let knownOrderId: string | null = order?.id ?? null;
+    let pendingFilter: { table: 'orders' | 'checkout_groups'; id: string } | null = order
+      ? { table: 'orders', id: order.id }
+      : null;
+
+    if (!order) {
+      const { data: group, error: groupError } = await admin
+        .from('checkout_groups')
+        .select('id, buyer_id, status')
+        .eq('payment_reference', reference)
+        .maybeSingle();
+      // 42P01: the bundle table does not exist on this project, so the
+      // reference simply is not ours.
+      if (groupError && groupError.code !== '42P01') return fail('Could not look that payment up.', 500);
+      if (!group) return fail('No order matches that payment reference.', 404);
+      owner = group.buyer_id;
+      alreadySettled = group.status === 'paid';
+      pendingFilter = { table: 'checkout_groups', id: group.id };
+      const { data: first } = await admin
+        .from('orders')
+        .select('id')
+        .eq('checkout_group_id', group.id)
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      knownOrderId = first?.id ?? null;
+    }
+
+    if (owner !== buyerId) return fail('That payment is not yours.', 403);
 
     // Already settled — by the webhook, or by an earlier tab. Report
     // success: the buyer paid, and that is the only fact they care about.
-    if (['escrow_held', 'escrow_released', 'paid'].includes(order.payment_status)) {
-      return json({ order_id: order.id, status: order.payment_status, already_finalized: true });
+    if (alreadySettled && knownOrderId) {
+      return json({ order_id: knownOrderId, status: order?.payment_status ?? 'escrow_held', already_finalized: true });
     }
 
     const tx = await verifyTransaction(reference);
 
     if (tx.status !== 'success') {
-      await admin
-        .from('orders')
-        .update({ payment_status: 'failed', updated_at: new Date().toISOString() })
-        .eq('id', order.id)
-        .eq('payment_status', 'pending');
+      // Same rule as before for single orders, applied to a bundle's
+      // group and all its orders. finalize_escrow_order still honours a
+      // 'failed' row if money later arrives, so this cannot lose a payment.
+      if (pendingFilter) {
+        if (pendingFilter.table === 'orders') {
+          await admin
+            .from('orders')
+            .update({ payment_status: 'failed', updated_at: new Date().toISOString() })
+            .eq('id', pendingFilter.id)
+            .eq('payment_status', 'pending');
+        } else {
+          await admin.from('checkout_groups').update({ status: 'failed' }).eq('id', pendingFilter.id).eq('status', 'pending');
+          await admin
+            .from('orders')
+            .update({ payment_status: 'failed', updated_at: new Date().toISOString() })
+            .eq('checkout_group_id', pendingFilter.id)
+            .eq('payment_status', 'pending');
+        }
+      }
       return fail(`Paystack reports this payment as ${tx.status}.`, 402);
     }
 
