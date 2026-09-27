@@ -2,8 +2,14 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from '../utils/supabase';
 import type { ShopView, Vendor } from '../types/db';
 
+/**
+ * Public shop-card fields only. This list is read by guests too
+ * (bookshops_public_directory.sql grants anon exactly these columns), so
+ * it must not name anything outside that grant — `profile_id`, the shop
+ * owner's account id, was dropped for that reason; nothing here used it.
+ */
 const VENDOR_COLUMNS =
-  'id, profile_id, store_name, address, city, is_active, phone, email, verified_at, rating, review_count, completed_orders, approval_status, featured, busy_mode, busy_note, created_at, updated_at';
+  'id, store_name, address, city, is_active, phone, email, verified_at, rating, review_count, completed_orders, approval_status, featured, busy_mode, busy_note, created_at, updated_at';
 
 /**
  * Every shop a buyer may send a booklist to.

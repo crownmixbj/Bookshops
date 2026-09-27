@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../utils/supabase';
+import { freshChannel } from '../lib/realtime';
 import type { FulfillmentStatus, QuoteStatus } from '../types/db';
 
 /**
@@ -188,8 +189,9 @@ export function useVendorMessages(initialQuoteId?: string | null) {
   useEffect(() => {
     if (migration !== 'ok') return;
 
-    const channel = supabase
-      .channel('vendor-quote-messages')
+    // A fresh topic per effect run (see lib/realtime.ts): every .on()
+    // is chained on a channel that has not joined yet, then subscribed.
+    const channel = freshChannel('vendor-quote-messages')
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'quote_messages' },

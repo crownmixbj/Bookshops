@@ -1,5 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
-import { View, Text, Animated, AccessibilityInfo, Pressable, StyleSheet } from 'react-native';
+import {
+  View,
+  Text,
+  Animated,
+  Easing,
+  AccessibilityInfo,
+  Platform,
+  Pressable,
+  StyleSheet,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, radius, shadow, typography } from '../../theme';
 import { useLayout } from '../../hooks/useLayout';
@@ -41,11 +50,13 @@ const HERO_SLIDES = [
 ];
 
 /**
- * Every 5 seconds, with a 1.2s crossfade. The hold timer restarts when
- * a new photo begins fading in, so a change starts every 5s exactly.
+ * A new photo every 5 seconds, crossfading over 0.8s with ease-in-out.
+ * The timer restarts the moment a fade begins, so a change starts every
+ * 5s exactly, however long the fade takes.
  */
 const SLIDE_HOLD_MS = 5000;
-const SLIDE_FADE_MS = 1200;
+const SLIDE_FADE_MS = 800;
+const SLIDE_EASING = Easing.inOut(Easing.ease);
 
 /** Intrinsic size of every hero photo. */
 const HERO_W = 1024;
@@ -167,14 +178,24 @@ export function HeroBanner({ onCreate, onBrowse }) {
   const frame = artFrame(panel.w, panel.h);
 
   // ---- slideshow ------------------------------------------------
-  // `current` fades in ON TOP of `prev`, which stays fully opaque
-  // underneath until the fade ends. Fading one out while the other fades
-  // in would dip through the panel colour halfway; this never does.
-  // Every photo stays mounted, so each is decoded once and a change
-  // never waits on a load.
+  // Every photo is mounted once, absolutely positioned in the same spot,
+  // each with its OWN opacity value. A change never adds, removes or
+  // resizes anything — only opacities and stacking order move — so the
+  // text and buttons beside it cannot shift.
+  //
+  // A change from A to B:
+  //   1. B (already at opacity 0) is raised above A.
+  //   2. B fades 0 -> 1 over A, which stays fully opaque underneath, so
+  //      the panel never dips through its background mid-fade.
+  //   3. Once B is fully in, A is dropped to 0, out of sight beneath it.
+  //
+  // The previous version shared one opacity value between whichever
+  // photo was incoming. It was still at 1 from the last fade when the
+  // new photo was first drawn, and was only reset to 0 a frame later —
+  // so each new photo flashed in at full strength before fading. That
+  // one-frame flash is what made the change feel abrupt.
+  const opacity = useRef(HERO_SLIDES.map((_, i) => new Animated.Value(i === 0 ? 1 : 0))).current;
   const [current, setCurrent] = useState(0);
-  const [prev, setPrev] = useState(null);
-  const fade = useRef(new Animated.Value(1)).current;
   const [still, setStill] = useState(false);
 
   // Respect "reduce motion": the first photo, and nothing moving.
@@ -193,19 +214,28 @@ export function HeroBanner({ onCreate, onBrowse }) {
   useEffect(() => {
     if (still || HERO_SLIDES.length < 2) return;
     const t = setTimeout(() => {
-      setPrev(current);
-      setCurrent((i) => (i + 1) % HERO_SLIDES.length);
+      const from = current;
+      const to = (current + 1) % HERO_SLIDES.length;
+      // Set BEFORE the re-render that raises it, so it is never drawn
+      // on top at anything but 0.
+      opacity[to].setValue(0);
+      setCurrent(to);
+      Animated.timing(opacity[to], {
+        toValue: 1,
+        duration: SLIDE_FADE_MS,
+        easing: SLIDE_EASING,
+        // The web has no native animation driver; asking for one there
+        // only logs a warning and falls back anyway.
+        useNativeDriver: Platform.OS !== 'web',
+      }).start(({ finished }) => {
+        if (finished) opacity[from].setValue(0);
+      });
     }, SLIDE_HOLD_MS);
+    // Only the pending timer is cleared. A fade already running is left to
+    // finish: `current` changing at the START of a fade is what re-runs
+    // this effect, and stopping it there would freeze the fade halfway.
     return () => clearTimeout(t);
-  }, [current, still]);
-
-  useEffect(() => {
-    if (prev === null) return;
-    fade.setValue(0);
-    const run = Animated.timing(fade, { toValue: 1, duration: SLIDE_FADE_MS, useNativeDriver: true });
-    run.start(({ finished }) => finished && setPrev(null));
-    return () => run.stop();
-  }, [current, prev, fade]);
+  }, [current, still, opacity]);
 
   const art = (
     <View
@@ -234,11 +264,9 @@ export function HeroBanner({ onCreate, onBrowse }) {
             style={[
               styles.art,
               { width: frame.width, height: frame.height },
-              i === current
-                ? { opacity: prev === null ? 1 : fade, zIndex: 2 }
-                : i === prev
-                ? { opacity: 1, zIndex: 1 }
-                : { opacity: 0, zIndex: 0 },
+              // Same shape of style every render — only the zIndex
+              // number changes — so nothing is re-created mid-fade.
+              { opacity: opacity[i], zIndex: i === current ? 2 : 1 },
             ]}
             resizeMode="stretch"
           />

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../utils/supabase';
+import { freshChannel } from '../lib/realtime';
 import { getSessionUserId, subscribeToAuthReloads } from '../lib/loadState';
 import { MISSING_CODES, type MigrationState } from './useChildren';
 import type { AppNotification } from '../types/db';
@@ -94,8 +95,9 @@ export function useBuyerAlerts(enabled: boolean, pathname: string) {
 
   useEffect(() => {
     if (!enabled || !signedIn || migration !== 'ok') return;
-    const channel = supabase
-      .channel('buyer-alerts')
+    // A fresh topic per effect run (see lib/realtime.ts): every .on()
+    // is chained on a channel that has not joined yet, then subscribed.
+    const channel = freshChannel('buyer-alerts')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications' }, scheduleReload)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'quote_messages' }, scheduleReload)
       .subscribe();

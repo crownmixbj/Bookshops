@@ -88,7 +88,8 @@ export default function ShopDetailScreen() {
       subtitle={[shop.city, shop.address].filter(Boolean).join(' · ') || undefined}
       right={
         <Pressable
-          onPress={toggleSaved}
+          // Viewing a shop is public; saving it is personal.
+          onPress={() => gate.requireAuth(toggleSaved, 'Log in to save this shop to your shortlist.')}
           style={({ pressed }) => [styles.save, saved && styles.saveOn, pressed && styles.pressed]}
           accessibilityRole="button"
           accessibilityLabel={saved ? `Remove ${shop.store_name} from saved shops` : `Save ${shop.store_name}`}

@@ -18,6 +18,8 @@ import { useShell } from '../../components/layout/ShellContext';
 
 import { useLayout } from '../../hooks/useLayout';
 import { useVendorDirectory } from '../../hooks/useVendorDirectory';
+import { useAuthGate } from '../../hooks/useAuthGate';
+import { SignInPrompt } from '../../components/auth/SignInPrompt';
 import { colors, spacing, radius, font, shadow } from '../../theme';
 import type { ShopView } from '../../types/db';
 
@@ -58,6 +60,13 @@ export default function BookshopsScreen() {
     refresh,
   } = useVendorDirectory();
 
+  // Browsing is open to everyone; saving a shop is personal, so a guest
+  // is asked to sign in at that moment — and the save goes through once
+  // they have, without losing their place in the list.
+  const gate = useAuthGate();
+  const saveShop = (shop: ShopView) =>
+    gate.requireAuth(() => toggleSaved(shop), 'Log in to save shops to your shortlist.');
+
   const q = (localSearch || shellSearch).trim().toLowerCase();
 
   const visible = useMemo(
@@ -86,6 +95,7 @@ export default function BookshopsScreen() {
     gridWidth && columns > 1 ? (gridWidth - gap * (columns - 1)) / columns : undefined;
 
   return (
+    <>
     <ScrollView
       style={styles.scroll}
       contentContainerStyle={[styles.scrollContent, { padding: contentPadding }]}
@@ -114,7 +124,9 @@ export default function BookshopsScreen() {
           label="Saved Shops"
           count={savedCount}
           active={tab === 'saved'}
-          onPress={() => setTab('saved')}
+          onPress={() =>
+            gate.requireAuth(() => setTab('saved'), 'Log in to see the shops you have saved.')
+          }
         />
       </View>
 
@@ -190,7 +202,7 @@ export default function BookshopsScreen() {
               width={cardWidth}
               saving={pending[shop.id]}
               onView={handleView}
-              onToggleSaved={toggleSaved}
+              onToggleSaved={saveShop}
             />
           ))}
         </View>
@@ -231,6 +243,14 @@ export default function BookshopsScreen() {
       <Footer />
 
     </ScrollView>
+
+    <SignInPrompt
+      visible={gate.promptVisible}
+      reason={gate.promptReason}
+      onClose={gate.closePrompt}
+      onAuthenticated={gate.onAuthenticated}
+    />
+    </>
   );
 }
 
