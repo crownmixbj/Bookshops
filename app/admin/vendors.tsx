@@ -74,7 +74,7 @@ function StatTile({
 export default function AdminVendorsScreen() {
   const { contentPadding, isMobile } = useLayout();
   const { role } = useShell();
-  const { rows, stats, loading, error, schemaMissing, refresh, reviewVendor, setSuspended } =
+  const { rows, stats, loading, error, schemaMissing, refresh, reviewVendor, reviewIdentity, confirmBank, setSuspended } =
     useAdminVendors();
 
   const [tab, setTab] = useState<'all' | VendorStatus>('all');
@@ -421,6 +421,18 @@ export default function AdminVendorsScreen() {
         busy={busyId !== null}
         onApprove={(row) => act(row, 'approve')}
         onRestore={(row) => act(row, 'restore')}
+        onReviewIdentity={async (row, verify, note) => {
+          const r = await reviewIdentity(row.id, verify, note);
+          if (r.ok) {
+            setNotice(
+              verify
+                ? `${row.store_name}'s identity verified — the shop now shows as Verified.`
+                : `${row.store_name}'s ID sent back with your note.`
+            );
+          }
+          return r;
+        }}
+        onConfirmBank={(row, confirmed) => confirmBank(row.id, confirmed)}
         onSuspend={(row) => {
           // Close the panel first: two stacked modals put two scrims on
           // screen and the confirmation ends up behind its own dimmer.

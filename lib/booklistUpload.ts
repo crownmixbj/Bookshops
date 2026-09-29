@@ -880,6 +880,11 @@ export function describeBooklistError(error: unknown): string {
   const e = error as { code?: string; message?: string };
   const message = e?.message ?? '';
 
+  // The one refusal that is policy rather than a fault.
+  if (isDailyLimitError(error)) {
+    return /daily limit/i.test(message) ? message : DAILY_REQUEST_LIMIT_MESSAGE;
+  }
+
   // 23514 = check_constraint_violation, 42703 = undefined_column,
   // PGRST204 = PostgREST cannot find the column in its schema cache.
   // All three mean the same thing here: a migration has not been run.
@@ -902,4 +907,66 @@ export function describeBooklistError(error: unknown): string {
   }
 
   return message || String(error);
+}
+
+// ---------------------------------------------------------------------
+// Daily quote-request limit (bookshops_quote_claims_and_limits.sql)
+// ---------------------------------------------------------------------
+//
+// The database is the rule: a trigger on book_requests refuses a buyer's
+// 4th list sent for quotes in one Lagos calendar day, whichever screen
+// sends it. The check below is only a courtesy for the screens that
+// create rows BEFORE sending (new-manual, the scan review), so the buyer
+// is told before anything is written rather than after.
+
+export const DAILY_REQUEST_LIMIT = 3;
+
+export const DAILY_REQUEST_LIMIT_MESSAGE =
+  `You have reached your daily limit of ${DAILY_REQUEST_LIMIT} quote requests. ` +
+  'Please check your active quotes or try again tomorrow.';
+
+/** The trigger's refusal, or the courtesy check's. */
+export function isDailyLimitError(error: unknown): boolean {
+  const e = error as { hint?: string } | null;
+  return e?.hint === 'daily_request_limit';
+}
+
+export interface QuoteRequestAllowance {
+  used: number;
+  limit: number;
+  remaining: number;
+  resetsAt: string | null;
+}
+
+/**
+ * How many lists this buyer can still send today. Null when it cannot be
+ * told (signed out, offline, migration not run) — callers then simply
+ * carry on and let the database decide.
+ */
+export async function getQuoteRequestAllowance(): Promise<QuoteRequestAllowance | null> {
+  const { data, error } = await supabase.rpc('my_quote_request_allowance');
+  if (error) return null;
+  const row = Array.isArray(data) ? (data[0] as Record<string, unknown> | undefined) : undefined;
+  if (!row) return null;
+  const used = Number(row.used ?? 0);
+  const limit = Number(row.daily_limit ?? DAILY_REQUEST_LIMIT);
+  return {
+    used,
+    limit,
+    remaining: Math.max(limit - used, 0),
+    resetsAt: (row.resets_at as string | null) ?? null,
+  };
+}
+
+/** Throws the polite limit error when today's sends are used up. */
+export async function assertCanRequestQuote(): Promise<void> {
+  const allowance = await getQuoteRequestAllowance();
+  if (allowance && allowance.remaining <= 0) {
+    const err = new Error(
+      `You have reached your daily limit of ${allowance.limit} quote requests. ` +
+        'Please check your active quotes or try again tomorrow.'
+    ) as Error & { hint: string };
+    err.hint = 'daily_request_limit';
+    throw err;
+  }
 }

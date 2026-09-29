@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../utils/supabase';
 import { freshChannel } from '../lib/realtime';
+import { announceMessagesRead, onPageVisible, pageVisible } from '../lib/unreadSignal';
 import { MISSING_CODES, type MigrationState } from './useChildren';
 import { MESSAGE_MAX, type ThreadMessage } from './useVendorMessages';
 import type { FulfillmentStatus, QuoteStatus } from '../types/db';
@@ -78,7 +79,15 @@ function toMessage(r: Record<string, any>): ThreadMessage {
   };
 }
 
-export function useBuyerMessages(initialQuoteId?: string | null) {
+/**
+ * @param screenActive  true only while the Messages screen is the one on
+ *   screen. The app's Stack keeps a screen mounted underneath the next one,
+ *   so without this a Messages page the buyer had navigated away from went
+ *   on marking its open thread read — on the window regaining focus, or
+ *   as new messages arrived — and the badge vanished before the buyer
+ *   ever came back to Messages.
+ */
+export function useBuyerMessages(initialQuoteId?: string | null, screenActive = true) {
   const [threads, setThreads] = useState<BuyerThread[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -91,6 +100,24 @@ export function useBuyerMessages(initialQuoteId?: string | null) {
 
   const activeRef = useRef<string | null>(activeId);
   activeRef.current = activeId;
+
+  /**
+   * True only when the buyer CHOSE the open thread: tapped it, followed a
+   * link to it (?quote=), or replied in it. Desktop also opens the newest
+   * thread automatically so the pane is not empty; that preview is not
+   * reading, and marking it read is what made shop messages turn "read"
+   * within a second of arriving, so the Messages badge never appeared.
+   */
+  const chosenRef = useRef<boolean>(!!initialQuoteId);
+
+  // Leaving the Messages screen un-chooses the open thread: coming back
+  // shows it again, but it only counts as read once the thread is tapped
+  // (or replied to) again.
+  const screenActiveRef = useRef(screenActive);
+  screenActiveRef.current = screenActive;
+  useEffect(() => {
+    if (!screenActive) chosenRef.current = false;
+  }, [screenActive]);
 
   // ---- the list --------------------------------------------------
   const loadThreads = useCallback(async (quiet = false) => {
@@ -123,10 +150,15 @@ export function useBuyerMessages(initialQuoteId?: string | null) {
 
   // ---- read state ------------------------------------------------
   const markRead = useCallback(async (quoteId: string) => {
+    if (!chosenRef.current || !screenActiveRef.current || !pageVisible()) return;
     const { data, error: rpcError } = await supabase.rpc('mark_quote_thread_read', { p_quote_id: quoteId });
     if (rpcError) return;
-    if (Number(data) > 0) {
+    const cleared = Number(data) || 0;
+    if (cleared > 0) {
       setThreads((prev) => prev.map((t) => (t.quote_id === quoteId ? { ...t, unread_count: 0 } : t)));
+      // The sidebar badge lives in another hook; tell it now rather than
+      // waiting for the Realtime echo of this update.
+      announceMessagesRead(cleared);
     }
   }, []);
 
@@ -226,6 +258,10 @@ export function useBuyerMessages(initialQuoteId?: string | null) {
         return { ok: false, message: rpcError.message };
       }
 
+      // Replying in a thread is reading it.
+      chosenRef.current = true;
+      markRead(quoteId);
+
       const saved = toMessage(data as Record<string, any>);
       setMessages((prev) => {
         const withoutTemp = prev.filter((m) => m.id !== tempId);
@@ -249,7 +285,38 @@ export function useBuyerMessages(initialQuoteId?: string | null) {
       );
       return { ok: true };
     },
-    []
+    [markRead]
+  );
+
+  /** The buyer picked a thread (tap, link, back button with null). */
+  const open = useCallback(
+    (quoteId: string | null) => {
+      chosenRef.current = !!quoteId;
+      if (quoteId && quoteId === activeRef.current) {
+        // Tapping the thread that is already on screen (e.g. the
+        // auto-opened preview) is the moment it is read.
+        markRead(quoteId);
+        return;
+      }
+      setActiveId(quoteId);
+    },
+    [markRead]
+  );
+
+  /** Shows a thread without counting it as read (desktop's first pane). */
+  const preview = useCallback((quoteId: string) => {
+    chosenRef.current = false;
+    setActiveId(quoteId);
+  }, []);
+
+  // Coming back to a tab that was hidden: whatever arrived meanwhile in
+  // the chosen thread is now actually in front of the buyer.
+  useEffect(
+    () =>
+      onPageVisible(() => {
+        if (activeRef.current) markRead(activeRef.current);
+      }),
+    [markRead]
   );
 
   const active = useMemo(() => threads.find((t) => t.quote_id === activeId) ?? null, [threads, activeId]);
@@ -263,7 +330,8 @@ export function useBuyerMessages(initialQuoteId?: string | null) {
     refresh: () => loadThreads(),
     activeId,
     active,
-    open: setActiveId,
+    open,
+    preview,
     messages,
     loadingThread,
     threadError,

@@ -44,6 +44,8 @@ export function SentQuoteModal({ quote, onClose }: Props) {
   const { isMobile } = useLayout();
   const [items, setItems] = useState<QuoteItem[]>([]);
   const [lumpSum, setLumpSum] = useState<LumpSum | null>(null);
+  /** quotes.delivery_fee — null on an older quote or before the migration. */
+  const [deliveryFee, setDeliveryFee] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -55,6 +57,7 @@ export function SentQuoteModal({ quote, onClose }: Props) {
       setLoading(true);
       setError(null);
       setLumpSum(null);
+      setDeliveryFee(null);
       const [{ data, error: e }, { data: header, error: headerError }] = await Promise.all([
         supabase
           .from('quote_items')
@@ -63,7 +66,7 @@ export function SentQuoteModal({ quote, onClose }: Props) {
           .order('position', { ascending: true }),
         supabase
           .from('quotes')
-          .select('pricing_mode, total_price, vendor_note, response_files')
+          .select('*')
           .eq('id', quote.quote_id)
           .maybeSingle(),
       ]);
@@ -72,6 +75,10 @@ export function SentQuoteModal({ quote, onClose }: Props) {
       if (e || headerError) setError((e ?? headerError)!.message);
       else {
         setItems((data ?? []) as QuoteItem[]);
+        // select('*') rather than naming delivery_fee, so this keeps
+        // working on a database that has not run the migration yet.
+        const fee = (header as { delivery_fee?: number | null } | null)?.delivery_fee;
+        setDeliveryFee(fee == null ? null : Number(fee));
         if (header?.pricing_mode === 'lump_sum') {
           setLumpSum({
             total: Number(header.total_price) || 0,
@@ -215,7 +222,16 @@ export function SentQuoteModal({ quote, onClose }: Props) {
                         : ''
                     }`}
               </Text>
-              <Text style={styles.footTotal}>{formatNaira(total)}</Text>
+              {deliveryFee == null ? (
+                <Text style={styles.footTotal}>{formatNaira(total)}</Text>
+              ) : (
+                <>
+                  <Text style={styles.footSplit}>
+                    Items {formatNaira(total)} · Delivery {deliveryFee === 0 ? 'free' : formatNaira(deliveryFee)}
+                  </Text>
+                  <Text style={styles.footTotal}>Buyer pays {formatNaira(total + deliveryFee)}</Text>
+                </>
+              )}
             </View>
             <Pressable
               onPress={onClose}
@@ -332,6 +348,7 @@ const styles = StyleSheet.create({
   },
   footLabel: { fontSize: font.sm, color: colors.textMuted },
   footTotal: { fontSize: font.xl, fontWeight: '800', color: colors.navy, marginTop: 1 },
+  footSplit: { fontSize: font.sm, color: colors.text, fontWeight: '600', marginTop: 2 },
   btn: {
     borderWidth: 1,
     borderColor: colors.border,

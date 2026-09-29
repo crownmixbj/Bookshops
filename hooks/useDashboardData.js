@@ -410,7 +410,8 @@ export function useDashboardData() {
         const { data: q, error: quotesError } = await supabase
           .from('quotes')
           .select(
-            'id, request_id, vendor_id, total_price, item_breakdown, status, created_at, vendors ( id, store_name, city, is_active, rating, review_count )'
+            // `*` so delivery_fee arrives where the column exists.
+            '*, vendors ( id, store_name, city, is_active, rating, review_count )'
           )
           .in('request_id', requestIds)
           .order('created_at', { ascending: false });
@@ -617,7 +618,8 @@ export function useDashboardData() {
       .map((q) => ({
         id: q.id,
         vendor_name: q.vendors?.store_name ?? 'Vendor (name hidden by RLS)',
-        total_price: Number(q.total_price) || 0,
+        // What the buyer would pay: the shop's items plus its delivery fee.
+        total_price: (Number(q.total_price) || 0) + (Number(q.delivery_fee) || 0),
         status: q.status,
         ...ratingFor(q.vendors),
       }));

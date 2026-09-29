@@ -19,6 +19,10 @@ export function TopBar({
   query,
   onQueryChange,
   onMenuPress,
+  // A dot on the hamburger when something inside the drawer needs
+  // attention (unread messages) — on a phone the sidebar badge is
+  // hidden until the drawer opens.
+  menuBadge = false,
   onProfilePress,
   onSupportPress,
   onBrandPress,
@@ -47,10 +51,11 @@ export function TopBar({
             onPress={onMenuPress}
             style={styles.iconBtn}
             accessibilityRole="button"
-            accessibilityLabel="Open navigation menu"
+            accessibilityLabel={menuBadge ? 'Open navigation menu, unread messages' : 'Open navigation menu'}
             hitSlop={8}
           >
             <Ionicons name="menu" size={22} color={colors.navy} />
+            {menuBadge && <View style={styles.menuDot} />}
           </Pressable>
         )}
 
@@ -262,6 +267,17 @@ const styles = StyleSheet.create({
     borderColor: colors.surface,
   },
   badgeText: { color: colors.onNavy, fontSize: 9, fontWeight: '800' },
+  menuDot: {
+    position: 'absolute',
+    top: 5,
+    right: 4,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: colors.orange,
+    borderWidth: 2,
+    borderColor: colors.surface,
+  },
   avatar: {
     width: 32,
     height: 32,

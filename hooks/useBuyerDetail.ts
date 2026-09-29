@@ -155,7 +155,10 @@ export type BooklistItem = BooklistItemRow & PricedLineFields;
 export interface BooklistQuote {
   id: string;
   vendor_id: string;
+  /** The items. What the buyer pays is total_price + delivery_fee. */
   total_price: number;
+  /** The shop's delivery charge; 0 is free. Absent before the delivery migration. */
+  delivery_fee?: number | null;
   status: string;
   created_at: string;
   /** 'itemised' or 'lump_sum'. A lump-sum quote's breakdown is an attachment. */
@@ -229,8 +232,9 @@ export function useBooklistDetail(requestId: string | null) {
       supabase
         .from('quotes')
         .select(
-          'id, vendor_id, total_price, status, created_at, pricing_mode, vendor_note, ' +
-            'response_files, vendors ( id, store_name, city )'
+          // `*`, not a column list, so delivery_fee comes through where the
+          // column exists and its absence cannot break the page.
+          '*, vendors ( id, store_name, city )'
         )
         .eq('request_id', requestId)
         .order('total_price', { ascending: true }),
@@ -340,8 +344,8 @@ export function useQuoteDetail(quoteId: string | null) {
     const { data, error: qError } = await supabase
       .from('quotes')
       .select(
-        'id, request_id, vendor_id, total_price, status, created_at, item_breakdown, ' +
-          'pricing_mode, vendor_note, response_files, decline_reason, ' +
+        // `*` for the same reason as above: delivery_fee where it exists.
+        '*, ' +
           'vendors ( id, store_name, city, rating, review_count ), ' +
           'book_requests ( id, school_name, class_level )'
       )

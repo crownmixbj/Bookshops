@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '../utils/supabase';
+import { saveVendorBankAccount } from '../lib/vendorKyc';
 
 export interface PayoutSummary {
   vendor_id: string;
@@ -117,33 +118,11 @@ export function useVendorPayouts() {
       input: { account_name: string; bank_name: string; account_number: string; bank_code?: string },
       password: string
     ): Promise<{ ok: boolean; message?: string }> => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user?.email) return { ok: false, message: 'You are not signed in.' };
       if (!summary?.vendor_id) return { ok: false, message: 'This account has no shop registered.' };
-
-      const { error: reauth } = await supabase.auth.signInWithPassword({
-        email: user.email,
-        password,
-      });
-      if (reauth) return { ok: false, message: 'That password is not correct.' };
-
-      const { error: writeError } = await supabase.from('vendor_bank_accounts').upsert(
-        {
-          vendor_id: summary.vendor_id,
-          account_name: input.account_name.trim(),
-          bank_name: input.bank_name.trim(),
-          bank_code: input.bank_code?.trim() || null,
-          account_number: input.account_number.trim(),
-          // Editing the details invalidates any previous name check.
-          verified_at: null,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: 'vendor_id' }
-      );
-      if (writeError) return { ok: false, message: writeError.message };
-
+      // One save path for bank details, shared with Settings
+      // (lib/vendorKyc.ts): validation, password re-check, upsert.
+      const result = await saveVendorBankAccount(summary.vendor_id, input, password);
+      if (!result.ok) return result;
       await load();
       return { ok: true };
     },

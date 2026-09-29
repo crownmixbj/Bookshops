@@ -24,6 +24,26 @@ const KIND_ICON: Record<NotificationKind, { icon: keyof typeof Ionicons.glyphMap
   order_delivered: { icon: 'checkmark-done-outline', fg: colors.success, bg: '#E4F2E8' },
   order_cancelled: { icon: 'close-circle-outline', fg: colors.danger, bg: '#FCEAE8' },
   escrow_released: { icon: 'cash-outline', fg: colors.success, bg: '#E4F2E8' },
+  // Vendor alerts
+  request_received: { icon: 'document-text-outline', fg: colors.navy, bg: '#E8EEF8' },
+  order_placed: { icon: 'cube-outline', fg: colors.orangeDark, bg: '#FDF1E6' },
+  quote_declined: { icon: 'close-circle-outline', fg: colors.textMuted, bg: colors.surfaceMuted },
+  buyer_message: { icon: 'chatbubble-ellipses-outline', fg: colors.orangeDark, bg: '#FDF1E6' },
+  payment_released: { icon: 'cash-outline', fg: colors.success, bg: '#E4F2E8' },
+};
+
+/** The panel is shared; only its empty-state words differ by role. */
+const COPY = {
+  buyer: {
+    caption: 'Quote updates, messages and deliveries',
+    empty: 'New quotes, messages from shops and delivery updates will appear here.',
+    file: 'bookshops_buyer_portal.sql',
+  },
+  vendor: {
+    caption: 'New booklists, orders, messages and payments',
+    empty: 'Booklists sent to your shop, new orders, buyer messages and released payments will appear here.',
+    file: 'bookshops_vendor_alerts.sql',
+  },
 };
 
 interface Props {
@@ -35,6 +55,8 @@ interface Props {
   onClose: () => void;
   onOpen: (n: AppNotification) => void;
   onMarkAllRead: () => void;
+  /** Whose bell this is. Defaults to the buyer's. */
+  audience?: 'buyer' | 'vendor';
 }
 
 export function NotificationsPanel({
@@ -46,8 +68,10 @@ export function NotificationsPanel({
   onClose,
   onOpen,
   onMarkAllRead,
+  audience = 'buyer',
 }: Props) {
   const { isMobile } = useLayout();
+  const copy = COPY[audience];
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -57,7 +81,7 @@ export function NotificationsPanel({
           <View style={{ flex: 1 }}>
             <Text style={styles.title}>Notifications</Text>
             <Text style={styles.caption}>
-              {unread > 0 ? `${unread} unread` : 'Quote updates, messages and deliveries'}
+              {unread > 0 ? `${unread} unread` : copy.caption}
             </Text>
           </View>
           {unread > 0 && (
@@ -75,7 +99,7 @@ export function NotificationsPanel({
             <View style={styles.state}>
               <Ionicons name="construct-outline" size={24} color={colors.textFaint} />
               <Text style={styles.stateTitle}>Notifications are not switched on yet</Text>
-              <Text style={styles.stateBody}>Run bookshops_buyer_portal.sql on this project to turn them on.</Text>
+              <Text style={styles.stateBody}>Run {copy.file} on this project to turn them on.</Text>
             </View>
           ) : loading && items.length === 0 ? (
             <View style={styles.state}>
@@ -86,7 +110,7 @@ export function NotificationsPanel({
               <Ionicons name="notifications-off-outline" size={24} color={colors.textFaint} />
               <Text style={styles.stateTitle}>You are all caught up</Text>
               <Text style={styles.stateBody}>
-                New quotes, messages from shops and delivery updates will appear here.
+                {copy.empty}
               </Text>
             </View>
           ) : (

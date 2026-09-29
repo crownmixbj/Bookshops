@@ -73,6 +73,15 @@ export default function QuoteDetailScreen() {
   const lumpSum = quote.pricing_mode === 'lump_sum';
   const responseFiles = parseResponseFiles(quote.response_files);
 
+  // What checkout will actually charge: the shop's items plus the shop's
+  // own delivery fee. Shown before paying, in the same three lines the
+  // checkout page uses, so the number never changes between here and the
+  // payment screen. null = an older quote from before shops set their
+  // own delivery (checkout still prices it; we just cannot show it here).
+  const itemsTotal = Number(quote.total_price) || 0;
+  const deliveryFee: number | null = quote.delivery_fee == null ? null : Number(quote.delivery_fee);
+  const payTotal = itemsTotal + (deliveryFee ?? 0);
+
   return (
     <BuyerPage
       eyebrow="Quote"
@@ -83,8 +92,31 @@ export default function QuoteDetailScreen() {
       ]
         .filter(Boolean)
         .join(' · ')}
-      right={<Text style={styles.total}>{formatNaira(quote.total_price)}</Text>}
+      right={<Text style={styles.total}>{formatNaira(payTotal)}</Text>}
     >
+      <Panel title="Price breakdown">
+        <View style={styles.breakdown} accessibilityLabel="Price breakdown">
+          <View style={styles.bRow}>
+            <Text style={styles.bLabel}>Items total</Text>
+            <Text style={styles.bValue}>{formatNaira(itemsTotal)}</Text>
+          </View>
+          <View style={styles.bRow}>
+            <Text style={styles.bLabel}>Delivery fee</Text>
+            <Text style={styles.bValue}>
+              {deliveryFee == null ? 'Added at checkout' : deliveryFee === 0 ? 'Free' : formatNaira(deliveryFee)}
+            </Text>
+          </View>
+          <View style={[styles.bRow, styles.bTotalRow]}>
+            <Text style={styles.bTotalLabel}>Total</Text>
+            <Text style={styles.bTotalValue}>{formatNaira(payTotal)}</Text>
+          </View>
+          <Text style={styles.bNote}>
+            Set by {shop?.store_name ?? 'the shop'}. Paid into LOCI escrow and released to the shop only
+            when you confirm delivery.
+          </Text>
+        </View>
+      </Panel>
+
       {unavailable.length > 0 && (
         <View style={styles.warn}>
           <Ionicons name="alert-circle-outline" size={16} color={colors.warning} />
@@ -192,14 +224,14 @@ export default function QuoteDetailScreen() {
             quote.status !== 'sent' && styles.ctaDisabled,
           ]}
           accessibilityRole="button"
-          accessibilityLabel={`Accept this quote and pay ${formatNaira(quote.total_price)}`}
+          accessibilityLabel={`Accept this quote and pay ${formatNaira(payTotal)}`}
         >
           <Ionicons name="lock-closed" size={15} color={colors.onNavy} />
           <Text style={styles.ctaText}>
             {quote.status === 'accepted'
               ? 'Already accepted'
               : quote.status === 'sent'
-                ? `Accept and pay ${formatNaira(quote.total_price)}`
+                ? `Accept and pay ${formatNaira(payTotal)}`
                 : quote.status === 'rejected'
                   ? 'You declined this quote'
                   : `Quote ${quote.status}`}
@@ -244,7 +276,7 @@ export default function QuoteDetailScreen() {
       <DeclineQuoteSheet
         visible={declining}
         shopName={shop?.store_name ?? 'The shop'}
-        total={quote.total_price}
+        total={payTotal}
         busy={declineBusy}
         error={declineError}
         onCancel={() => setDeclining(false)}
@@ -256,6 +288,15 @@ export default function QuoteDetailScreen() {
 
 const styles = StyleSheet.create({
   total: { fontSize: font.xxl, fontWeight: '800', color: colors.text },
+
+  breakdown: { gap: 6 },
+  bRow: { flexDirection: 'row', justifyContent: 'space-between', gap: spacing.lg },
+  bLabel: { fontSize: font.md, color: colors.textMuted },
+  bValue: { fontSize: font.md, fontWeight: '700', color: colors.text },
+  bTotalRow: { borderTopWidth: 1, borderTopColor: colors.border, paddingTop: spacing.sm, marginTop: 2 },
+  bTotalLabel: { fontSize: font.lg, fontWeight: '800', color: colors.text },
+  bTotalValue: { fontSize: font.lg, fontWeight: '800', color: colors.navy },
+  bNote: { fontSize: font.sm, color: colors.textFaint, marginTop: spacing.xs, lineHeight: 18 },
   muted: { fontSize: font.md, color: colors.textMuted, lineHeight: 20 },
   note: { backgroundColor: colors.surfaceMuted, borderRadius: radius.md, padding: spacing.md, gap: 4 },
   noteLabel: { fontSize: font.sm, fontWeight: '700', color: colors.textMuted },

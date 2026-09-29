@@ -12,6 +12,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../../utils/supabase';
 import { emailRedirectTo } from '../../lib/authRedirect';
+import { loadPendingBooklist } from '../../lib/pendingBooklist';
 import {
   describeAuthError,
   hasErrors,
@@ -77,6 +78,22 @@ export function SignInPrompt({ visible, reason, onClose, onAuthenticated }: Prop
   const [fieldErrors, setFieldErrors] = useState<FieldErrors<Field>>({});
   /** Sign-up succeeded but the project requires email confirmation. */
   const [confirmSent, setConfirmSent] = useState(false);
+  /**
+   * What is waiting on the device for after confirmation, if anything:
+   * a booklist the guest pressed "Sign in to Send" on is sent
+   * automatically once they come back signed in (PendingBooklistResumer).
+   */
+  const [waiting, setWaiting] = useState<{ school: string; photo: boolean } | null>(null);
+  useEffect(() => {
+    if (!confirmSent) return;
+    let alive = true;
+    loadPendingBooklist().then((p) => {
+      if (alive) setWaiting(p ? { school: p.school, photo: !!p.photo } : null);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [confirmSent]);
 
   // Cleared on close, not on open: a sheet that is closing should not
   // visibly reset its fields on the way out, and a password must never
@@ -215,8 +232,13 @@ export function SignInPrompt({ visible, reason, onClose, onAuthenticated }: Prop
                   a photo held in memory does not survive that — better
                   said now than discovered on the way back. */}
               <Text style={styles.warn}>
-                Your typed books are saved on this device. A photo you attached is not — you can
-                add it again after confirming.
+                {waiting
+                  ? `Your booklist for ${waiting.school || 'your school'} is saved on this device${
+                      waiting.photo ? ', photo included' : ''
+                    }. Once you confirm and sign in, it is sent to shops automatically.${
+                      waiting.photo ? '' : ' A photo you attached could not be kept — add it again afterwards.'
+                    }`
+                  : 'Your typed books are saved on this device. A photo you attached is not — you can add it again after confirming.'}
               </Text>
               <Pressable
                 onPress={onClose}

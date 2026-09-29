@@ -86,6 +86,7 @@ export default function VendorQuotesScreen() {
     selected,
     lines,
     imagePath,
+    delivery,
     totals,
     loading: queueLoading,
     loadingDetail,
@@ -93,9 +94,15 @@ export default function VendorQuotesScreen() {
     notice: editorNotice,
     error: editorError,
     openRequest,
+    acceptRequest,
+    claimingId,
+    queueMessage,
+    dismissQueueMessage,
     closeRequest,
     setLinePrice,
     setLineAvailable,
+    deliveryText,
+    setDeliveryText,
     saveQuote,
     declineRequest,
     refresh: refreshQueue,
@@ -207,10 +214,20 @@ export default function VendorQuotesScreen() {
               </Text>
             }
           >
+            {!!queueMessage && (
+              <View style={styles.claimNotice} accessibilityLiveRegion="polite">
+                <Ionicons name="information-circle" size={16} color={colors.navy} />
+                <Text style={styles.claimNoticeText}>{queueMessage}</Text>
+                <Pressable onPress={dismissQueueMessage} hitSlop={8} accessibilityLabel="Dismiss">
+                  <Ionicons name="close" size={16} color={colors.textMuted} />
+                </Pressable>
+              </View>
+            )}
             <RequestQueue
               rows={incoming}
               selectedId={selected?.request_id ?? null}
-              onView={openRequest}
+              claimingId={claimingId}
+              onView={acceptRequest}
               onDecline={(row) => declineRequest(row)}
             />
           </Panel>
@@ -230,6 +247,7 @@ export default function VendorQuotesScreen() {
               request={selected}
               lines={lines}
               imagePath={imagePath}
+              delivery={delivery}
               vendorId={vendor?.id ?? null}
               onLumpSumSaved={(status) => {
                 refresh();
@@ -237,6 +255,8 @@ export default function VendorQuotesScreen() {
                 if (status === 'sent') closeRequest();
               }}
               totals={totals}
+              deliveryText={deliveryText}
+              onDeliveryChange={setDeliveryText}
               loading={loadingDetail}
               saving={busySaving}
               notice={editorNotice}
@@ -605,6 +625,17 @@ const styles = StyleSheet.create({
     marginBottom: spacing.lg,
   },
   noticeText: { flex: 1, fontSize: font.sm, color: colors.warning, lineHeight: 18 },
+  claimNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: '#E8EEF8',
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+  },
+  claimNoticeText: { flex: 1, fontSize: font.sm, color: colors.navy, lineHeight: 18, fontWeight: '600' },
 
   tabs: { gap: spacing.sm, paddingBottom: spacing.lg, paddingRight: spacing.lg },
   tab: {

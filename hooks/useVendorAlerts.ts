@@ -4,53 +4,69 @@ import { freshChannel } from '../lib/realtime';
 import { onMessagesRead } from '../lib/unreadSignal';
 import { getSessionUserId, subscribeToAuthReloads } from '../lib/loadState';
 import { MISSING_CODES, type MigrationState } from './useChildren';
-import type { AppNotification } from '../types/db';
+import { SETTLED_PAYMENT_STATUSES, type AppNotification } from '../types/db';
 
 /**
- * Everything the buyer's header badges need: the alert inbox behind the
- * bell, and the unread-message count behind "Messages" in the sidebar.
+ * The vendor's half of useBuyerAlerts: the alert inbox behind the bell,
+ * the unread-message count behind "Messaging", and the orders-to-pack
+ * count behind "Orders".
  *
- * Mounted once, in AppShell, and live over Supabase Realtime. Both
- * subscriptions are unfiltered on purpose — RLS (notifications_select_own,
- * quote_messages_select_participant) already limits what arrives to this
- * buyer's own rows, so a filter would add nothing but a second place to
- * get the scoping wrong.
+ * Same shape and the same behaviour as the buyer's, on purpose:
+ *   - mounted once, in AppShell;
+ *   - live over Supabase Realtime (notifications + quote_messages), with
+ *     no filters because RLS already limits what arrives to this shop's
+ *     own rows;
+ *   - refreshed on navigation, so opening a thread (which marks it read
+ *     server-side) clears the badge on the next screen.
  *
- * Alerts are written by database triggers (bookshops_buyer_portal.sql),
- * so they are right whoever made the change: a vendor sending a quote, a
- * courier webhook, an admin cancelling an order.
+ * Alerts are written by database triggers (bookshops_vendor_alerts.sql),
+ * so they are right whoever made the change — the buyer's app, the
+ * payment webhook, or an admin.
+ *
+ * `orders` is not in the realtime publication, so the to-pack count is
+ * refreshed with everything else and on a one-minute timer. A new paid
+ * order still lights the bell instantly: it arrives as an order_placed
+ * alert, and that reload recounts the orders too.
  */
 
 const LIMIT = 40;
 const COLUMNS = 'id, kind, title, body, link, quote_id, order_id, request_id, created_at, read_at';
 
-export function useBuyerAlerts(enabled: boolean, pathname: string) {
+export function useVendorAlerts(enabled: boolean, pathname: string) {
   const [items, setItems] = useState<AppNotification[]>([]);
   const [unreadMessages, setUnreadMessages] = useState(0);
+  const [ordersToPack, setOrdersToPack] = useState(0);
   const [loading, setLoading] = useState(true);
   const [migration, setMigration] = useState<MigrationState>('unknown');
   const [signedIn, setSignedIn] = useState(false);
   const alive = useRef(true);
 
-  const loadAlerts = useCallback(async () => {
+  const load = useCallback(async () => {
     const uid = await getSessionUserId();
     if (!alive.current) return;
     setSignedIn(!!uid);
     if (!uid) {
       setItems([]);
       setUnreadMessages(0);
+      setOrdersToPack(0);
       setLoading(false);
       return;
     }
 
-    const [alertsRes, unreadRes] = await Promise.all([
+    const [alertsRes, unreadRes, ordersRes] = await Promise.all([
       supabase
         .from('notifications')
         .select(COLUMNS)
         .eq('recipient_id', uid)
         .order('created_at', { ascending: false })
         .limit(LIMIT),
-      supabase.rpc('buyer_unread_message_count'),
+      supabase.rpc('vendor_unread_message_count'),
+      // orders_select_own scopes this to the shop's own orders.
+      supabase
+        .from('orders')
+        .select('id', { count: 'exact', head: true })
+        .in('fulfillment_status', ['processing', 'ready'])
+        .in('payment_status', SETTLED_PAYMENT_STATUSES),
     ]);
     if (!alive.current) return;
 
@@ -61,32 +77,38 @@ export function useBuyerAlerts(enabled: boolean, pathname: string) {
       setMigration('ok');
       setItems((alertsRes.data ?? []) as AppNotification[]);
     }
+    // A failed count costs a badge, never the shell.
     if (!unreadRes.error) setUnreadMessages(Number(unreadRes.data ?? 0));
+    if (!ordersRes.error) setOrdersToPack(ordersRes.count ?? 0);
     setLoading(false);
   }, []);
 
-  // Coalesce a burst (a bundle checkout settles several orders at once).
+  // Coalesce a burst: one payment fires an order alert, a quote update
+  // and sibling declines within the same second.
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scheduleReload = useCallback(() => {
     if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(loadAlerts, 350);
-  }, [loadAlerts]);
+    timer.current = setTimeout(load, 350);
+  }, [load]);
 
   useEffect(() => {
     alive.current = true;
     if (!enabled) return;
-    loadAlerts();
-    const unsubscribe = subscribeToAuthReloads(loadAlerts);
+    load();
+    const unsubscribe = subscribeToAuthReloads(load);
+    const poll = setInterval(load, 60_000);
     return () => {
       alive.current = false;
       unsubscribe();
+      clearInterval(poll);
       if (timer.current) clearTimeout(timer.current);
     };
-  }, [enabled, loadAlerts]);
+  }, [enabled, load]);
 
-  // Reading a thread on /messages drops the badge at once: the inbox
-  // announces how many it cleared, the count comes down immediately,
-  // and a re-count from the server follows to keep it exact.
+  // Reading a thread on /vendor/messages drops the badge at once, the
+  // same way the buyer's does: the inbox announces how many it cleared,
+  // the count comes down, and a re-count follows (which also picks up the
+  // thread's message alert, cleared server-side by mark_quote_thread_read).
   useEffect(() => {
     if (!enabled) return;
     return onMessagesRead((cleared) => {
@@ -95,9 +117,8 @@ export function useBuyerAlerts(enabled: boolean, pathname: string) {
     });
   }, [enabled, scheduleReload]);
 
-  // Backstop for anything else that changes read state (another tab,
-  // another device with Realtime down): re-count on navigation. Skips
-  // the first path it sees — the initial load above has just covered it.
+  // Backstop: re-count on navigation. Skips the first path it sees — the
+  // initial load has just covered it.
   const lastPath = useRef<string | null>(null);
   useEffect(() => {
     if (!enabled || !signedIn) return;
@@ -107,9 +128,8 @@ export function useBuyerAlerts(enabled: boolean, pathname: string) {
 
   useEffect(() => {
     if (!enabled || !signedIn || migration !== 'ok') return;
-    // A fresh topic per effect run (see lib/realtime.ts): every .on()
-    // is chained on a channel that has not joined yet, then subscribed.
-    const channel = freshChannel('buyer-alerts')
+    // A fresh topic per effect run (see lib/realtime.ts).
+    const channel = freshChannel('vendor-alerts')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications' }, scheduleReload)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'quote_messages' }, scheduleReload)
       .subscribe();
@@ -129,14 +149,22 @@ export function useBuyerAlerts(enabled: boolean, pathname: string) {
 
   const unread = useMemo(() => items.filter((n) => !n.read_at).length, [items]);
 
+  /** Keyed by sidebar nav key — what VendorSidebar's `badges` expects. */
+  const badges = useMemo(
+    () => ({ orders: ordersToPack, messages: unreadMessages }),
+    [ordersToPack, unreadMessages]
+  );
+
   return {
     items,
     unread,
     unreadMessages,
+    ordersToPack,
+    badges,
     loading,
     migration,
     signedIn,
-    refresh: loadAlerts,
+    refresh: load,
     markRead,
     markAllRead: () => markRead(null),
   };

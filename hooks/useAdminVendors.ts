@@ -162,6 +162,30 @@ export function useAdminVendors() {
   );
 
   /**
+   * Verify or reject the OWNER'S IDENTITY (bookshops_vendor_identity.sql).
+   * The only thing that sets vendors.verified_at — approval no longer does.
+   */
+  const reviewIdentity = useCallback(
+    async (vendorId: string, verify: boolean, note: string | null) => {
+      const { error: e } = await supabase.rpc('admin_review_identity', {
+        p_vendor: vendorId,
+        p_verify: verify,
+        p_note: note,
+      });
+      if (e) return { ok: false, message: e.message };
+      await load();
+      return { ok: true };
+    },
+    [load]
+  );
+
+  /** Confirm (or un-confirm) the shop's payout account after checking it. */
+  const confirmBank = useCallback(async (vendorId: string, confirmed: boolean) => {
+    const { error: e } = await supabase.rpc('admin_confirm_bank', { p_vendor: vendorId, p_confirmed: confirmed });
+    return e ? { ok: false, message: e.message } : { ok: true };
+  }, []);
+
+  /**
    * Suspend or restore the OWNER'S ACCOUNT. Note the target is the
    * profile id, not the vendor id — passing the wrong one silently
    * suspends nobody.
@@ -193,5 +217,17 @@ export function useAdminVendors() {
     [load]
   );
 
-  return { rows, stats, loading, error, schemaMissing, refresh: load, reviewVendor, setSuspended, setFeatured };
+  return {
+    rows,
+    stats,
+    loading,
+    error,
+    schemaMissing,
+    refresh: load,
+    reviewVendor,
+    reviewIdentity,
+    confirmBank,
+    setSuspended,
+    setFeatured,
+  };
 }

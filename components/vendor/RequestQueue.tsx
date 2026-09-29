@@ -1,12 +1,13 @@
-import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native';
+import { View, Text, Pressable, ScrollView, ActivityIndicator, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import type { QueueBadge, VendorQueueRow } from '../../types/db';
-import { badgeFor, BADGE_LABEL } from '../../hooks/useVendorDashboard';
+import { badgeFor, BADGE_LABEL, claimTimeLeft } from '../../hooks/useVendorDashboard';
 import { colors, spacing, radius, font } from '../../theme';
 import { useLayout } from '../../hooks/useLayout';
 
 const BADGE_TONE: Record<QueueBadge, { bg: string; fg: string }> = {
   new: { bg: '#FCEAE8', fg: colors.danger },
+  claimed: { bg: '#E4EAF5', fg: colors.navy },
   pending: { bg: colors.warningBg, fg: colors.warning },
   processing: { bg: '#E4EAF5', fg: colors.navy },
   sent: { bg: '#E4F2E8', fg: colors.success },
@@ -22,27 +23,66 @@ function Badge({ kind }: { kind: QueueBadge }) {
   );
 }
 
+/** An open-pool list nobody holds: pressing the button claims it. */
+function isUnclaimedPool(row: VendorQueueRow): boolean {
+  return !row.is_targeted && !row.claimed_by_me && !row.my_quote_id;
+}
+
+function primaryLabel(row: VendorQueueRow): string {
+  if (isUnclaimedPool(row)) return 'Accept & Quote';
+  if (row.my_quote_status === 'sent' || row.my_quote_status === 'accepted') return 'View Quote';
+  if (row.my_quote_id || row.claimed_by_me) return 'Continue Quote';
+  return 'Provide Quote';
+}
+
+/** One line on who else can see this list. */
+function claimNote(row: VendorQueueRow): string | null {
+  if (row.is_targeted) return 'Sent to you only';
+  if (row.claimed_by_me) {
+    const left = claimTimeLeft(row.claim_expires_at);
+    return left ? `Reserved for you for ${left}` : 'Reserved for you';
+  }
+  if (!row.my_quote_id) return 'Open pool · the first shop to accept gets it';
+  return null;
+}
+
 function Actions({
   row,
+  claiming,
   onView,
   onDecline,
 }: {
   row: VendorQueueRow;
+  claiming: boolean;
   onView: (row: VendorQueueRow) => void;
   onDecline: (row: VendorQueueRow) => void;
 }) {
+  const accept = isUnclaimedPool(row);
+  const label = primaryLabel(row);
   return (
     <View style={styles.actions}>
       <Pressable
         onPress={() => onView(row)}
-        style={({ pressed }) => [styles.btn, styles.btnView, pressed && styles.pressed]}
+        disabled={claiming}
+        style={({ pressed }) => [
+          styles.btn,
+          accept ? styles.btnAccept : styles.btnView,
+          pressed && styles.pressed,
+          claiming && styles.btnBusy,
+        ]}
         accessibilityRole="button"
-        accessibilityLabel={`View list for ${row.customer_name ?? row.reference}`}
+        accessibilityState={{ busy: claiming, disabled: claiming }}
+        accessibilityLabel={`${label}: ${row.customer_name ?? row.reference}`}
       >
-        <Text style={styles.btnViewText}>View List</Text>
+        {claiming ? (
+          <ActivityIndicator size="small" color={accept ? colors.onNavy : colors.navy} />
+        ) : (
+          <Text style={accept ? styles.btnAcceptText : styles.btnViewText}>{label}</Text>
+        )}
       </Pressable>
       <Pressable
         onPress={() => onDecline(row)}
+        disabled={claiming}
         style={({ pressed }) => [styles.btn, styles.btnDecline, pressed && styles.pressed]}
         accessibilityRole="button"
         accessibilityLabel={`Decline ${row.customer_name ?? row.reference}`}
@@ -67,11 +107,14 @@ function Actions({
 export function RequestQueue({
   rows,
   selectedId,
+  claimingId = null,
   onView,
   onDecline,
 }: {
   rows: VendorQueueRow[];
   selectedId: string | null;
+  /** The row whose "Accept & Quote" is in flight. */
+  claimingId?: string | null;
   onView: (row: VendorQueueRow) => void;
   onDecline: (row: VendorQueueRow) => void;
 }) {
@@ -104,17 +147,28 @@ export function RequestQueue({
                 <Text style={styles.cardMeta} numberOfLines={1}>
                   {[row.school_name, row.class_level].filter(Boolean).join(' · ')}
                 </Text>
+                {!!row.delivery_area && (
+                  <Text style={styles.cardMeta} numberOfLines={1}>
+                    Deliver to {row.delivery_area}
+                  </Text>
+                )}
               </View>
               <Badge kind={badgeFor(row)} />
             </View>
             <Text style={styles.cardItems}>
               {row.item_count} item{row.item_count === 1 ? '' : 's'}
-              {/* After bookshops_dispatch_routing.sql this is stronger
-                  than a preference: a direct request is in no other
-                  shop's queue at all. */}
-              {row.is_targeted ? ' · sent to you only' : ''}
+              {/* After bookshops_dispatch_routing.sql a direct request is
+                  in no other shop's queue at all; after
+                  bookshops_quote_claims_and_limits.sql neither is an
+                  open-pool list once one shop has accepted it. */}
+              {claimNote(row) ? ` · ${claimNote(row)}` : ''}
             </Text>
-            <Actions row={row} onView={onView} onDecline={onDecline} />
+            <Actions
+              row={row}
+              claiming={claimingId === row.request_id}
+              onView={onView}
+              onDecline={onDecline}
+            />
           </View>
         ))}
       </View>
@@ -145,15 +199,28 @@ export function RequestQueue({
                 <Text style={styles.cellHint}>Name shown once you quote</Text>
               )}
             </View>
-            <Text style={[styles.cell, styles.colSchool]} numberOfLines={2}>
-              {[row.school_name, row.class_level].filter(Boolean).join(' — ') || '—'}
-            </Text>
+            <View style={styles.colSchool}>
+              <Text style={styles.cell} numberOfLines={2}>
+                {[row.school_name, row.class_level].filter(Boolean).join(' — ') || '—'}
+              </Text>
+              {!!row.delivery_area && (
+                <Text style={styles.cellHint} numberOfLines={1}>
+                  Deliver to {row.delivery_area}
+                </Text>
+              )}
+            </View>
             <Text style={[styles.cell, styles.colItems]}>{row.item_count}</Text>
             <View style={styles.colStatus}>
               <Badge kind={badgeFor(row)} />
+              {!!claimNote(row) && <Text style={styles.cellHint}>{claimNote(row)}</Text>}
             </View>
             <View style={styles.colActions}>
-              <Actions row={row} onView={onView} onDecline={onDecline} />
+              <Actions
+                row={row}
+                claiming={claimingId === row.request_id}
+                onView={onView}
+                onDecline={onDecline}
+              />
             </View>
           </View>
         ))}
@@ -209,6 +276,9 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   btnView: { borderColor: colors.navy },
+  btnAccept: { borderColor: colors.orange, backgroundColor: colors.orange, minWidth: 118, alignItems: 'center' },
+  btnAcceptText: { color: colors.onNavy, fontWeight: '800', fontSize: font.sm },
+  btnBusy: { opacity: 0.7 },
   btnViewText: { color: colors.navy, fontWeight: '700', fontSize: font.sm },
   btnDecline: { borderColor: '#F0C4BF' },
   btnDeclineText: { color: colors.danger, fontWeight: '700', fontSize: font.sm },

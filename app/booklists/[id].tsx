@@ -88,11 +88,14 @@ export default function BooklistDetailScreen() {
   // Offers still open, and the cheapest of them. Matched by id rather
   // than by taking the first row: the list is sorted live-first, so
   // index 0 is only the cheapest overall when something live exists.
+  // Compared on what the buyer would actually pay — items plus that
+  // shop's own delivery fee. A shop ₦500 cheaper on books but ₦2,000
+  // dearer on delivery is not the lowest.
+  const payable = (q: { total_price: number | string; delivery_fee?: number | null }) =>
+    (Number(q.total_price) || 0) + (Number(q.delivery_fee) || 0);
   const live = quotes.filter((q) => q.isLive);
   const liveCount = live.length;
-  const cheapestLive = live.length
-    ? live.reduce((a, b) => (Number(b.total_price) < Number(a.total_price) ? b : a))
-    : null;
+  const cheapestLive = live.length ? live.reduce((a, b) => (payable(b) < payable(a) ? b : a)) : null;
   const closedCount = quotes.length - liveCount;
 
   return (
@@ -178,7 +181,7 @@ export default function BooklistDetailScreen() {
         }
         right={
           cheapestLive ? (
-            <Text style={styles.estimate}>From {formatNaira(cheapestLive.total_price)}</Text>
+            <Text style={styles.estimate}>From {formatNaira(payable(cheapestLive))}</Text>
           ) : null
         }
       >
@@ -212,7 +215,7 @@ export default function BooklistDetailScreen() {
                   accessibilityRole="button"
                   accessibilityLabel={
                     `${q.isLive ? 'Review the quote' : 'Open the closed quote'} from ` +
-                    `${q.vendors?.store_name ?? 'a shop'}, ${formatNaira(q.total_price)}`
+                    `${q.vendors?.store_name ?? 'a shop'}, ${formatNaira(payable(q))} including delivery`
                   }
                 >
                   <View style={[styles.thumb, !q.isLive && styles.thumbOff]}>
@@ -236,6 +239,11 @@ export default function BooklistDetailScreen() {
                     <Text style={styles.itemMeta} numberOfLines={2}>
                       {[
                         q.vendors?.city ?? null,
+                        q.delivery_fee == null
+                          ? null
+                          : Number(q.delivery_fee) === 0
+                            ? 'Free delivery'
+                            : `Items ${formatNaira(q.total_price)} + ${formatNaira(q.delivery_fee)} delivery`,
                         // A lump-sum quote has no lines to count, so
                         // saying "0 of 12" would be a lie about the
                         // shop rather than a fact about the quote.
@@ -259,7 +267,7 @@ export default function BooklistDetailScreen() {
                   </View>
 
                   <Text style={[styles.itemPrice, !q.isLive && styles.dim]}>
-                    {formatNaira(q.total_price)}
+                    {formatNaira(payable(q))}
                   </Text>
                   <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
                 </Pressable>

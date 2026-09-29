@@ -18,10 +18,18 @@ import {
 } from '../../components/booklists/ConfirmAccuracy';
 import { supabase } from '../../utils/supabase';
 import { ChildPicker } from '../../components/household/ChildPicker';
+import { DeliveryAddressSection } from '../../components/booklists/DeliveryAddressSection';
+import {
+  deliveryProblem,
+  hasDelivery,
+  saveRequestDelivery,
+  type DeliveryChoice,
+} from '../../lib/requestDelivery';
 import type { Child } from '../../types/db';
 import {
   DRAFT_STATUS,
   describeBooklistError,
+  assertCanRequestQuote,
   directTo,
   draftImageKey,
   guessCategory,
@@ -109,6 +117,9 @@ export default function NewBooklistScreen() {
   const [classLevel, setClassLevel] = useState('');
   /** Which child the list is for. Null = not labelled with a child. */
   const [child, setChild] = useState<Child | null>(null);
+  /** Where the books go. Preselected with the default saved address. */
+  const [delivery, setDelivery] = useState<DeliveryChoice>({ mode: 'none' });
+  const [deliveryIssue, setDeliveryIssue] = useState<string | null>(null);
   const [lines, setLines] = useState<DraftLine[]>([blankLine()]);
   const gate = useAuthGate();
   /**
@@ -356,6 +367,18 @@ export default function NewBooklistScreen() {
       return;
     }
 
+    // Sending to a shop needs somewhere to send to — it is what the shop
+    // prices delivery against. A draft can wait for it.
+    if (isDirect) {
+      const issue = deliveryProblem(delivery);
+      if (issue) {
+        setDeliveryIssue(issue);
+        setError(issue);
+        return;
+      }
+    }
+    setDeliveryIssue(null);
+
     setShowProblems(false);
     setSaving(true);
     setError(null);
@@ -366,6 +389,11 @@ export default function NewBooklistScreen() {
         data: { user },
       } = await supabase.auth.getUser();
       if (!user) throw new Error('You are signed out. Sign in and try again.');
+
+      // Sending to a shop counts toward the daily limit. Checked before
+      // anything is written, so a refused buyer is not left with a
+      // half-made list to clean up. The trigger is still the rule.
+      if (isDirect) await assertCanRequestQuote();
 
       // NOTE: book_requests has no `title` column — the school name is
       // what identifies a booklist today, which is why it is required
@@ -422,6 +450,10 @@ export default function NewBooklistScreen() {
           .eq('id', requestId);
         if (photoError) throw photoError;
       }
+
+      // The destination goes on while the list is still a draft, so the
+      // shop sees the right address the moment it arrives.
+      if (hasDelivery(delivery)) await saveRequestDelivery(requestId, delivery);
 
       // Opened from a shop's page: send it to that shop and no other.
       // Left as a draft otherwise, which is what this screen has always
@@ -607,6 +639,20 @@ export default function NewBooklistScreen() {
           last
         />
       </Panel>
+
+      {gate.signedIn && (
+        <Panel title="Delivery">
+          <DeliveryAddressSection
+            value={delivery}
+            onChange={(next) => {
+              setDelivery(next);
+              if (deliveryIssue) setDeliveryIssue(null);
+            }}
+            disabled={saving}
+            problem={deliveryIssue}
+          />
+        </Panel>
+      )}
 
       <Panel
         title="Books on This List"

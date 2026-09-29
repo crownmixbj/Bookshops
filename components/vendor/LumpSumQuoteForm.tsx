@@ -186,7 +186,7 @@ export function LumpSumQuoteForm({
       />
 
       {/* 2. The total */}
-      <Text style={styles.label}>Total for this booklist (₦)</Text>
+      <Text style={styles.label}>Items total for this booklist (₦)</Text>
       <View style={styles.totalRow}>
         <TextInput
           value={q.totalText}
@@ -202,9 +202,46 @@ export function LumpSumQuoteForm({
           {q.total != null && q.total > 0 ? formatNaira(q.total) : ''}
         </Text>
       </View>
-      <Text style={styles.hint}>
-        Books only. The delivery fee is added at checkout.
-      </Text>
+      <Text style={styles.hint}>Books and items only — delivery goes in its own box below.</Text>
+
+      {/* 2b. Delivery, as its own number */}
+      <Text style={styles.label}>Delivery cost (₦)</Text>
+      <View style={styles.totalRow}>
+        <TextInput
+          value={q.deliveryText}
+          onChangeText={(t) => q.setDeliveryText(t.replace(/[^0-9.]/g, ''))}
+          editable={!q.locked}
+          placeholder="e.g. 2000 — or 0"
+          placeholderTextColor={colors.textFaint}
+          keyboardType="decimal-pad"
+          style={[styles.input, styles.totalInput]}
+          accessibilityLabel="Delivery cost in naira"
+        />
+        <Text style={styles.totalPreview}>
+          {q.deliveryFee == null ? '' : q.deliveryFee === 0 ? 'Free' : formatNaira(q.deliveryFee)}
+        </Text>
+      </View>
+      <Text style={styles.hint}>Required to submit. Enter 0 if delivery is free.</Text>
+
+      {/* What the buyer will see before paying. */}
+      <View style={styles.breakdown} accessibilityLabel="Quote breakdown the buyer will see">
+        <View style={styles.breakdownRow}>
+          <Text style={styles.breakdownLabel}>Items total</Text>
+          <Text style={styles.breakdownValue}>{q.total != null ? formatNaira(q.total) : '—'}</Text>
+        </View>
+        <View style={styles.breakdownRow}>
+          <Text style={styles.breakdownLabel}>Delivery fee</Text>
+          <Text style={styles.breakdownValue}>
+            {q.deliveryFee == null ? '—' : q.deliveryFee === 0 ? 'Free' : formatNaira(q.deliveryFee)}
+          </Text>
+        </View>
+        <View style={[styles.breakdownRow, styles.breakdownTotalRow]}>
+          <Text style={styles.breakdownTotalLabel}>Buyer pays</Text>
+          <Text style={styles.breakdownTotalValue}>
+            {formatNaira((q.total ?? 0) + (q.deliveryFee ?? 0))}
+          </Text>
+        </View>
+      </View>
 
       {/* 3. The note */}
       <Text style={styles.label}>Note to the customer (optional)</Text>
@@ -273,7 +310,9 @@ export function LumpSumQuoteForm({
                 ? 'Preparing your files…'
                 : !q.pages.length
                   ? 'Attach your priced sheet and enter a total to submit.'
-                  : 'Enter a total above ₦0 to submit.'}
+                  : q.total == null || q.total <= 0
+                    ? 'Enter a total above ₦0 to submit.'
+                    : 'Enter your delivery cost (0 for free delivery) to submit.'}
             </Text>
           )}
           <Text style={styles.draftNote}>
@@ -333,6 +372,20 @@ const styles = StyleSheet.create({
 
   label: { fontSize: font.sm, fontWeight: '700', color: colors.text, marginTop: spacing.md },
   hint: { fontSize: font.xs, color: colors.textFaint, lineHeight: 16 },
+  breakdown: {
+    gap: 4,
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginTop: spacing.md,
+    maxWidth: 360,
+  },
+  breakdownRow: { flexDirection: 'row', justifyContent: 'space-between', gap: spacing.lg },
+  breakdownLabel: { fontSize: font.sm, color: colors.textMuted },
+  breakdownValue: { fontSize: font.sm, fontWeight: '700', color: colors.text },
+  breakdownTotalRow: { borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 6, marginTop: 2 },
+  breakdownTotalLabel: { fontSize: font.md, fontWeight: '800', color: colors.text },
+  breakdownTotalValue: { fontSize: font.md, fontWeight: '800', color: colors.navy },
   counter: { fontSize: font.xs, color: colors.textFaint, textAlign: 'right' },
 
   pickRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },

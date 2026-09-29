@@ -12,7 +12,7 @@ import {
   StyleSheet,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams, usePathname } from 'expo-router';
 
 import {
   FilterPills,
@@ -67,8 +67,11 @@ export default function BuyerMessagesScreen() {
   const params = useLocalSearchParams<{ quote?: string }>();
   const initial = typeof params.quote === 'string' ? params.quote : null;
 
-  const inbox = useBuyerMessages(initial);
-  const { threads, loading, error, migration, refresh, activeId, active, open, unreadTotal } = inbox;
+  // The Stack keeps this screen mounted after the buyer moves on; it may
+  // only mark messages read while it is the screen actually showing.
+  const pathname = usePathname();
+  const inbox = useBuyerMessages(initial, pathname === '/messages');
+  const { threads, loading, error, migration, refresh, activeId, active, open, preview, unreadTotal } = inbox;
 
   const [filter, setFilter] = useState<Filter>('all');
 
@@ -76,11 +79,13 @@ export default function BuyerMessagesScreen() {
     if (initial) open(initial);
   }, [initial, open]);
 
-  // Desktop opens the most recent conversation rather than an empty
+  // Desktop previews the most recent conversation rather than an empty
   // pane. A phone shows the list first, which is what it has room for.
+  // A preview does not mark anything read — only choosing a thread does
+  // — so unread messages keep their badge until the buyer opens them.
   useEffect(() => {
-    if (!isMobile && !activeId && !initial && threads.length > 0) open(threads[0].quote_id);
-  }, [isMobile, activeId, initial, threads, open]);
+    if (!isMobile && !activeId && !initial && threads.length > 0) preview(threads[0].quote_id);
+  }, [isMobile, activeId, initial, threads, preview]);
 
   const query = search.trim().toLowerCase();
   const visible = useMemo(

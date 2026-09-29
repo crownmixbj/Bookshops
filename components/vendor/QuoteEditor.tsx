@@ -9,7 +9,8 @@ import {
   StyleSheet,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import type { VendorQueueRow } from '../../types/db';
+import type { RequestDelivery, VendorQueueRow } from '../../types/db';
+import { deliveryLine } from '../../lib/requestDelivery';
 import type { DraftLine } from '../../hooks/useVendorDashboard';
 import { colors, spacing, radius, font, formatNaira } from '../../theme';
 import { useLayout } from '../../hooks/useLayout';
@@ -21,6 +22,12 @@ interface Props {
   lines: DraftLine[];
   /** Object path of the buyer's booklist photo in the private bucket. */
   imagePath?: string | null;
+  /**
+   * Where the buyer wants the books delivered. Null when they gave no
+   * address (or the migration has not run) — the editor says so, rather
+   * than leaving the shop to guess.
+   */
+  delivery?: RequestDelivery | null;
   /** The quoting shop. Needed for the single-total quote's file upload. */
   vendorId?: string | null;
   /** A single-total quote for a photo-only booklist was saved or sent. */
@@ -30,7 +37,13 @@ interface Props {
     unavailableCount: number;
     unpricedCount: number;
     estimatedTotal: number;
+    /** Null until typed; 0 is free delivery. */
+    deliveryFee: number | null;
+    grandTotal: number;
   };
+  /** The delivery cost as typed. Separate from the line prices. */
+  deliveryText: string;
+  onDeliveryChange: (text: string) => void;
   loading: boolean;
   saving: boolean;
   notice: string | null;
@@ -40,6 +53,42 @@ interface Props {
   onSaveDraft: () => void;
   onSubmit: () => void;
   onClose: () => void;
+}
+
+/** The destination the delivery cost is priced to. */
+function DeliverTo({ delivery, area }: { delivery: RequestDelivery | null; area: string | null }) {
+  if (!delivery) {
+    return (
+      <View style={[styles.deliverTo, styles.deliverToMissing]}>
+        <Ionicons name="location-outline" size={16} color={colors.warning} />
+        <Text style={styles.deliverToMissingText}>
+          {area
+            ? `Delivering to ${area}. The full address appears here once the list is yours to quote.`
+            : 'The buyer has not given a delivery address. Quote your usual delivery cost, or message them to ask where the books are going.'}
+        </Text>
+      </View>
+    );
+  }
+  const who = [delivery.recipient_name, delivery.phone].filter(Boolean).join(' · ');
+  return (
+    <View style={styles.deliverTo} accessibilityLabel={`Deliver to ${deliveryLine(delivery)}`}>
+      <Ionicons name="location" size={18} color={colors.navy} style={{ marginTop: 1 }} />
+      <View style={{ flex: 1, gap: 2 }}>
+        <View style={styles.deliverToHead}>
+          <Text style={styles.deliverToLabel}>Deliver to</Text>
+          {delivery.is_alternate && (
+            <View style={styles.altTag}>
+              <Text style={styles.altTagText}>Different from buyer's saved address</Text>
+            </View>
+          )}
+        </View>
+        <Text style={styles.deliverToLine}>{deliveryLine(delivery)}</Text>
+        {!!delivery.landmark && <Text style={styles.deliverToMeta}>Landmark: {delivery.landmark}</Text>}
+        {!!who && <Text style={styles.deliverToMeta}>Recipient: {who}</Text>}
+        {!!delivery.notes && <Text style={styles.deliverToMeta}>Notes: {delivery.notes}</Text>}
+      </View>
+    </View>
+  );
 }
 
 function LineRow({
@@ -133,6 +182,7 @@ export function QuoteEditor({
   request,
   lines,
   imagePath,
+  delivery = null,
   vendorId = null,
   onLumpSumSaved,
   totals,
@@ -145,6 +195,8 @@ export function QuoteEditor({
   onSaveDraft,
   onSubmit,
   onClose,
+  deliveryText,
+  onDeliveryChange,
 }: Props) {
   const { isMobile } = useLayout();
   const alreadySent = request.my_quote_status === 'sent' || request.my_quote_status === 'accepted';
@@ -165,6 +217,8 @@ export function QuoteEditor({
           <Ionicons name="chevron-up" size={20} color={colors.textMuted} />
         </Pressable>
       </View>
+
+      {!loading && <DeliverTo delivery={delivery} area={request.delivery_area ?? null} />}
 
       {loading ? (
         <View style={styles.loading}>
@@ -248,8 +302,52 @@ export function QuoteEditor({
             </View>
 
             <View style={styles.footerTotal}>
-              <Text style={styles.footerTotalLabel}>Est. Total</Text>
-              <Text style={styles.footerTotalValue}>{formatNaira(totals.estimatedTotal)}</Text>
+              <Text style={styles.footerTotalLabel}>Items total</Text>
+              <Text style={styles.footerItemsValue}>{formatNaira(totals.estimatedTotal)}</Text>
+            </View>
+          </View>
+
+          {/* Delivery is its own number, not folded into a line price:
+              the buyer sees Items / Delivery / Total side by side, and
+              checkout charges exactly that. */}
+          <View style={[styles.delivery, isMobile && styles.deliveryStacked]}>
+            <View style={styles.deliveryField}>
+              <Text style={styles.deliveryLabel}>
+                Delivery cost (₦){delivery ? ` — to ${[delivery.city, delivery.state].filter(Boolean).join(', ')}` : ''}
+              </Text>
+              <TextInput
+                value={deliveryText}
+                onChangeText={(t) => onDeliveryChange(t.replace(/[^0-9.]/g, ''))}
+                placeholder="e.g. 2000 — or 0 for free delivery"
+                placeholderTextColor={colors.textFaint}
+                keyboardType="numeric"
+                style={[styles.deliveryInput, totals.deliveryFee == null && styles.deliveryInputEmpty]}
+                accessibilityLabel="Delivery cost in naira"
+              />
+              <Text style={styles.deliveryHint}>
+                {totals.deliveryFee == null
+                  ? 'Required to submit. Enter 0 if delivery is free.'
+                  : totals.deliveryFee === 0
+                  ? 'Shown to the buyer as free delivery.'
+                  : 'Charged once, on top of the books.'}
+              </Text>
+            </View>
+
+            <View style={styles.breakdown} accessibilityLabel="Quote breakdown the buyer will see">
+              <View style={styles.breakdownRow}>
+                <Text style={styles.breakdownLabel}>Items total</Text>
+                <Text style={styles.breakdownValue}>{formatNaira(totals.estimatedTotal)}</Text>
+              </View>
+              <View style={styles.breakdownRow}>
+                <Text style={styles.breakdownLabel}>Delivery fee</Text>
+                <Text style={styles.breakdownValue}>
+                  {totals.deliveryFee == null ? '—' : totals.deliveryFee === 0 ? 'Free' : formatNaira(totals.deliveryFee)}
+                </Text>
+              </View>
+              <View style={[styles.breakdownRow, styles.breakdownTotalRow]}>
+                <Text style={styles.breakdownTotalLabel}>Buyer pays</Text>
+                <Text style={styles.footerTotalValue}>{formatNaira(totals.grandTotal)}</Text>
+              </View>
             </View>
           </View>
 
@@ -269,11 +367,11 @@ export function QuoteEditor({
           <View style={styles.actions}>
             <Pressable
               onPress={onSubmit}
-              disabled={saving || totals.unpricedCount > 0}
+              disabled={saving || totals.unpricedCount > 0 || totals.deliveryFee == null}
               style={({ pressed }) => [
                 styles.action,
                 styles.actionPrimary,
-                (saving || totals.unpricedCount > 0) && styles.actionDisabled,
+                (saving || totals.unpricedCount > 0 || totals.deliveryFee == null) && styles.actionDisabled,
                 pressed && styles.pressed,
               ]}
               accessibilityRole="button"
@@ -399,6 +497,43 @@ const styles = StyleSheet.create({
   footerTotal: { alignItems: 'flex-end' },
   footerTotalLabel: { fontSize: font.xs, color: colors.textMuted, fontWeight: '600' },
   footerTotalValue: { fontSize: font.xl, fontWeight: '800', color: colors.navy },
+  footerItemsValue: { fontSize: font.lg, fontWeight: '700', color: colors.text },
+
+  delivery: {
+    flexDirection: 'row',
+    gap: spacing.lg,
+    alignItems: 'flex-start',
+    padding: spacing.lg,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  deliveryStacked: { flexDirection: 'column', alignItems: 'stretch' },
+  deliveryField: { flex: 1, gap: 5, minWidth: 200, maxWidth: 360 },
+  deliveryLabel: { fontSize: font.sm, fontWeight: '700', color: colors.text },
+  deliveryInput: {
+    minHeight: 44,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    borderRadius: radius.md,
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.md,
+    fontSize: font.md,
+    color: colors.text,
+  },
+  deliveryInputEmpty: { borderColor: colors.warning },
+  deliveryHint: { fontSize: font.xs, color: colors.textFaint },
+  breakdown: {
+    minWidth: 220,
+    gap: 4,
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: radius.md,
+    padding: spacing.md,
+  },
+  breakdownRow: { flexDirection: 'row', justifyContent: 'space-between', gap: spacing.lg },
+  breakdownLabel: { fontSize: font.sm, color: colors.textMuted },
+  breakdownValue: { fontSize: font.sm, fontWeight: '700', color: colors.text },
+  breakdownTotalRow: { borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 6, marginTop: 2, alignItems: 'center' },
+  breakdownTotalLabel: { fontSize: font.md, fontWeight: '800', color: colors.text },
 
   message: {
     flexDirection: 'row',
@@ -458,4 +593,24 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   pressed: { opacity: 0.85 },
+  deliverTo: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    marginHorizontal: spacing.lg,
+    marginTop: spacing.md,
+    padding: spacing.md,
+    borderRadius: radius.md,
+    backgroundColor: '#F4F8FF',
+    borderWidth: 1,
+    borderColor: '#D6E0F0',
+  },
+  deliverToMissing: { backgroundColor: colors.warningBg, borderColor: '#F1DDB5', alignItems: 'center' },
+  deliverToMissingText: { flex: 1, fontSize: font.sm, color: colors.warning, lineHeight: 18 },
+  deliverToHead: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flexWrap: 'wrap' },
+  deliverToLabel: { fontSize: font.xs, fontWeight: '800', color: colors.textMuted, letterSpacing: 0.5, textTransform: 'uppercase' },
+  deliverToLine: { fontSize: font.md, fontWeight: '700', color: colors.text, lineHeight: 20 },
+  deliverToMeta: { fontSize: font.sm, color: colors.textMuted, lineHeight: 18 },
+  altTag: { backgroundColor: '#FDF1E6', borderRadius: radius.pill, paddingHorizontal: 8, paddingVertical: 1 },
+  altTagText: { fontSize: font.xs, fontWeight: '700', color: colors.orangeDark },
 });

@@ -11,7 +11,6 @@ import {
   StyleSheet,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { supabase } from '../../utils/supabase';
 import { ChildPicker } from '../household/ChildPicker';
 import type { Child } from '../../types/db';
 import {
@@ -23,14 +22,24 @@ import {
   IMAGE_PROCESSING_TIMEOUT_MS,
   SLOW_UPLOAD_MESSAGE,
   guessCategory,
-  DRAFT_STATUS,
-  PUBLISHED_STATUS,
   describeBooklistError,
   type PickedImage,
   type ParsedItem,
 } from '../../lib/booklistUpload';
 import { QuantityStepper } from './QuantityStepper';
 import { BooklistSummary, ConfirmAccuracyCheckbox } from './ConfirmAccuracy';
+import { DeliveryAddressSection } from './DeliveryAddressSection';
+import { submitBooklist } from '../../lib/booklistSubmit';
+import {
+  clearPendingBooklist,
+  holdPendingBooklist,
+  photoForStorage,
+  savePendingBooklist,
+} from '../../lib/pendingBooklist';
+import {
+  deliveryProblem,
+  type DeliveryChoice,
+} from '../../lib/requestDelivery';
 import {
   AUTHOR_PLACEHOLDER,
   AUTHOR_REQUIRED_MESSAGE,
@@ -129,6 +138,11 @@ export function BooklistReviewModal({
   const [classLevel, setClassLevel] = useState('');
   /** Which child the list is for. Null = not labelled with a child. */
   const [child, setChild] = useState<Child | null>(null);
+  /** Where the books go. Preselected with the default saved address. */
+  const [delivery, setDelivery] = useState<DeliveryChoice>({ mode: 'none' });
+  const [deliveryIssue, setDeliveryIssue] = useState<string | null>(null);
+  /** Bumped by reset() so the next booklist preselects the default again. */
+  const [deliveryKey, setDeliveryKey] = useState(0);
   const [items, setItems] = useState<ParsedItem[]>([]);
   const [imagePath, setImagePath] = useState<string | null>(null);
   const [showPhoto, setShowPhoto] = useState(false);
@@ -171,6 +185,9 @@ export function BooklistReviewModal({
    * loses focus.
    */
   const pendingSubmit = useRef<boolean | null>(null);
+  /** The session as of now, for effects that must not re-run when it changes. */
+  const userIdRef = useRef(userId);
+  userIdRef.current = userId;
   /** The body scroller, so a validation failure can be scrolled to. */
   const scrollRef = useRef<ScrollView>(null);
   /**
@@ -192,6 +209,9 @@ export function BooklistReviewModal({
     setSchool('');
     setClassLevel('');
     setChild(null);
+    setDelivery({ mode: 'none' });
+    setDeliveryIssue(null);
+    setDeliveryKey((k) => k + 1);
     setItems([]);
     setImagePath(null);
     setShowPhoto(false);
@@ -224,6 +244,9 @@ export function BooklistReviewModal({
    */
   useEffect(() => {
     if (!visible || !image) return;
+    // Read once per photo, from the ref (see userIdRef): signing in
+    // part-way must not re-upload, re-read and reset what they typed.
+    const userId = userIdRef.current;
     let cancelled = false;
 
     (async () => {
@@ -348,7 +371,12 @@ export function BooklistReviewModal({
     // and a genuinely new photo always has a new uri. `attempt` is here
     // so "Try again" re-runs it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, image?.uri, userId, initialSchool, attempt, reset]);
+    // userId is deliberately NOT a dependency. When a guest signs in with
+    // the card open, this used to run again: a second upload of the same
+    // photo, and reset() wiping every line they had typed — while the
+    // send that sign-in was for was still in flight. The send uploads the
+    // photo itself (handleSave), so there is nothing here to redo.
+  }, [visible, image?.uri, initialSchool, attempt, reset]);
 
   /* ---------------- item editing ---------------- */
 
@@ -384,7 +412,10 @@ export function BooklistReviewModal({
    * A shop opening the request sees the photo and quotes off it, which
    * is exactly what happens over WhatsApp today.
    */
-  const photoOnly = selected.length === 0 && Boolean(imagePath);
+  // Any photo counts: uploaded (imagePath) or still only on the device —
+  // a guest's is not uploaded until they sign in, and before this their
+  // "send the photo on its own" could never pass the checks.
+  const photoOnly = selected.length === 0 && (Boolean(imagePath) || Boolean(image));
   /**
    * Note what is NOT in here: userId.
    *
@@ -443,6 +474,10 @@ export function BooklistReviewModal({
     if (!userId || pendingSubmit.current === null) return;
     const publish = pendingSubmit.current;
     pendingSubmit.current = null;
+    // This modal is sending it (or leaving it on screen for a press), so
+    // the stored copy must not be sent a second time by the resumer.
+    void clearPendingBooklist();
+    dropHold();
     if (!confirmed || phase !== 'review') return;
     void handleSave(publish);
     // handleSave is redeclared every render and depends on all of the
@@ -490,8 +525,41 @@ export function BooklistReviewModal({
       return;
     }
 
+    // Checked before the sign-in ask, so a guest fixes everything first
+    // and the send can go straight through once they are signed in.
+    if (publish) {
+      const issue = deliveryProblem(delivery);
+      if (issue) {
+        setDeliveryIssue(issue);
+        setError(issue);
+        return;
+      }
+    }
+
     void handleSave(publish);
   }
+
+  /** Held while an intercepted guest send is waiting on this modal. */
+  const releaseHold = useRef<(() => void) | null>(null);
+  const dropHold = useCallback(() => {
+    releaseHold.current?.();
+    releaseHold.current = null;
+  }, []);
+  useEffect(() => dropHold, [dropHold]);
+
+  /**
+   * Closing the card abandons the send, so the copy kept for "sign in and
+   * come back" goes too — nobody should find a booklist sent the next
+   * time they happen to log in after deciding against it.
+   */
+  const closeCard = useCallback(() => {
+    if (releaseHold.current || pendingSubmit.current !== null) {
+      pendingSubmit.current = null;
+      dropHold();
+      void clearPendingBooklist();
+    }
+    onClose();
+  }, [dropHold, onClose]);
 
   async function handleSave(publish: boolean) {
     if (phase !== 'review') return;
@@ -501,6 +569,28 @@ export function BooklistReviewModal({
     // coming back costs them nothing they have already done.
     if (!userId) {
       pendingSubmit.current = publish;
+      // This modal will send it the moment they sign in in the sheet...
+      if (!releaseHold.current) releaseHold.current = holdPendingBooklist();
+      // ...and this copy survives if signing up takes them away from the
+      // page (email confirmation) — PendingBooklistResumer sends it then.
+      // Saved before the sheet opens, so there is no window where they
+      // are signing up and nothing has been kept.
+      const photo = await photoForStorage(image);
+      await savePendingBooklist({
+        school,
+        classLevel,
+        lines: selected.map((item) => ({
+          title: item.title,
+          author: item.author,
+          category: item.title.trim() ? guessCategory(item.title) : item.category,
+          quantity: item.quantity,
+          parsed: item.id.startsWith('parsed-'),
+        })),
+        delivery,
+        publish,
+        confirmed,
+        photo,
+      });
       onRequireAuth?.();
       return;
     }
@@ -521,81 +611,79 @@ export function BooklistReviewModal({
       return;
     }
     if (!canSubmit) return;
+    // Sending needs somewhere to send to: it is what shops price delivery
+    // against. A draft can wait for it.
+    if (publish) {
+      const issue = deliveryProblem(delivery);
+      if (issue) {
+        setDeliveryIssue(issue);
+        setError(issue);
+        return;
+      }
+    }
+    setDeliveryIssue(null);
     setShowProblems(false);
     setPhase('submitting');
     setPending(publish ? 'publish' : 'draft');
     setError(null);
 
     try {
-      const { data: created, error: insertError } = await supabase
-        .from('book_requests')
-        .insert({
-          buyer_id: userId,
-          school_name: school.trim(),
-          class_level: classLevel.trim(),
-          image_path: imagePath,
-          // Only sent when chosen, so a project that has not run
-          // bookshops_buyer_portal.sql never sees an unknown column.
-          ...(child ? { child_id: child.id } : {}),
-          // PUBLISHED_STATUS is the SINGULAR 'pending_quote' — the value
-          // vendor_request_queue() filters on. See lib/booklistUpload.ts.
-          status: publish ? PUBLISHED_STATUS : DRAFT_STATUS,
-        })
-        .select('id')
-        .single();
-      if (insertError) throw insertError;
-
-      const requestId = created.id as string;
-
-      // Only the checked lines. An unchecked line means "I already own
-      // this", and sending it anyway is how a buyer ends up paying for a
-      // second copy of a book that is on their shelf.
-      const rows = selected.map((item, i) => ({
-        request_id: requestId,
-        title: item.title.trim(),
-        // Required for books now, so it is written as a value rather
-        // than coalesced to null. Stationery and uniform lines legitimately
-        // have none and still store ''.
-        author: item.author.trim(),
-        category: item.title.trim() ? guessCategory(item.title) : item.category,
-        quantity: item.quantity,
-        // True only for lines the parser produced — it flags rows a
-        // vendor should read with suspicion. A line the buyer typed is
-        // not a guess and must not be marked as one.
-        parsed: item.id.startsWith('parsed-'),
-        position: i,
-      }));
-
-      // Photo-only: nothing to insert. An empty insert is not a no-op in
-      // PostgREST, it is a 400.
-      const { error: itemsError } = rows.length
-        ? await supabase.from('book_request_items').insert(rows)
-        : { error: null };
-
-      if (itemsError) {
-        // bookshops_booklist_author.sql may not have been run on this
-        // project yet. Dropping the author and retrying keeps the
-        // booklist usable instead of failing the whole submission over
-        // one optional field.
-        const missingAuthor =
-          /author/i.test(itemsError.message) &&
-          /(column|schema cache|does not exist)/i.test(itemsError.message);
-        if (!missingAuthor) throw itemsError;
-
-        const { error: retryError } = await supabase
-          .from('book_request_items')
-          .insert(rows.map(({ author, ...rest }) => rest));
-        if (retryError) throw retryError;
+      // A guest's photo waits on the device until they are signed in —
+      // the storage policy needs their user id in the path. Upload it now,
+      // so the booklist goes out with the picture they attached.
+      let photoPath = imagePath;
+      if (!photoPath && image) {
+        setStep('Uploading your photo…');
+        try {
+          photoPath = await withTimeout(
+            uploadBooklistImage(userId, draftImageKey(), image),
+            IMAGE_PROCESSING_TIMEOUT_MS,
+            'Photo upload'
+          );
+          setImagePath(photoPath);
+        } catch (e) {
+          // Only fatal when the photo IS the list.
+          if (selected.length === 0) {
+            throw new Error(
+              `Your photo could not be uploaded (${(e as Error).message}). Try again, or type the books in.`
+            );
+          }
+          console.warn('[booklist] photo not uploaded; sending the typed lines only:', e);
+        }
       }
+
+      const { itemCount, deliveryNote } = await submitBooklist({
+        userId,
+        school,
+        classLevel,
+        childId: child?.id ?? null,
+        imagePath: photoPath,
+        // Only the checked lines. An unchecked line means "I already own
+        // this", and sending it anyway is how a buyer ends up paying for a
+        // second copy of a book that is on their shelf.
+        lines: selected.map((item) => ({
+          title: item.title,
+          author: item.author,
+          category: item.title.trim() ? guessCategory(item.title) : item.category,
+          quantity: item.quantity,
+          // True only for lines the parser produced — it flags rows a
+          // vendor should read with suspicion.
+          parsed: item.id.startsWith('parsed-'),
+        })),
+        publish,
+        delivery,
+      });
+      const rows = { length: itemCount };
 
       const count = `${selected.length} item${selected.length === 1 ? '' : 's'}`;
       const what = rows.length ? count : 'the photo only';
       await onSubmitted(
-        publish
+        (publish
           ? `Booklist sent for quotes — ${what} for ${school.trim()}.${
               rows.length ? '' : ' Shops will quote from the picture.'
             }`
-          : `Draft saved — ${what} for ${school.trim()}. Publish it when you're ready for quotes.`
+          : `Draft saved — ${what} for ${school.trim()}. Publish it when you're ready for quotes.`) +
+          deliveryNote
       );
       reset();
       onClose();
@@ -618,7 +706,7 @@ export function BooklistReviewModal({
       visible={visible && !suppressed}
       transparent
       animationType="fade"
-      onRequestClose={busy ? undefined : onClose}
+      onRequestClose={busy ? undefined : closeCard}
     >
       <Pressable
         style={styles.scrim}
@@ -635,7 +723,7 @@ export function BooklistReviewModal({
               </Text>
             </View>
             <Pressable
-              onPress={onClose}
+              onPress={closeCard}
               disabled={phase === 'submitting'}
               hitSlop={8}
               accessibilityLabel="Close"
@@ -889,6 +977,18 @@ export function BooklistReviewModal({
                   <Text style={styles.errorText}>{error}</Text>
                 </View>
               )}
+
+              {/* ---- where the books go ---- */}
+              <DeliveryAddressSection
+                key={deliveryKey}
+                value={delivery}
+                onChange={(next) => {
+                  setDelivery(next);
+                  if (deliveryIssue) setDeliveryIssue(null);
+                }}
+                disabled={busy}
+                problem={deliveryIssue}
+              />
 
               {/* ---- review & confirm, immediately above the buttons ---- */}
               <View

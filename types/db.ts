@@ -225,6 +225,20 @@ export interface VendorQueueRow {
   my_quote_status: QuoteStatus | null;
   customer_name: string | null;
   customer_phone: string | null;
+  /**
+   * Open-pool lists only (bookshops_quote_claims_and_limits.sql): this
+   * shop pressed "Accept & Quote" first and holds the list. Absent on a
+   * database without that migration.
+   */
+  claimed_by_me?: boolean | null;
+  /** When an unsent claim lapses and the list returns to the pool. */
+  claim_expires_at?: string | null;
+  /**
+   * City/state the books are going to (never the street). Shown for every
+   * row so a shop can judge the delivery before accepting. Absent before
+   * bookshops_booklist_delivery.sql.
+   */
+  delivery_area?: string | null;
 }
 
 /**
@@ -279,7 +293,7 @@ export type VendorQuoteState = 'draft' | 'sent' | 'accepted' | 'ordered' | 'decl
 export type VendorQuoteTab = 'all' | 'pending' | 'accepted' | 'declined' | 'draft';
 
 /** How a queue row reads to the vendor. */
-export type QueueBadge = 'new' | 'processing' | 'pending' | 'sent' | 'accepted';
+export type QueueBadge = 'new' | 'claimed' | 'processing' | 'pending' | 'sent' | 'accepted';
 
 export interface AdminAction {
   id: string;
@@ -446,7 +460,14 @@ export interface Quote {
   id: string;
   request_id: string;
   vendor_id: string;
+  /** The items. Checkout charges total_price + delivery_fee. */
   total_price: number;
+  /**
+   * The shop's own delivery charge (bookshops_quote_delivery_fee.sql).
+   * 0 = free delivery; null only on a draft. Optional on the type so a
+   * select that does not ask for it still type-checks.
+   */
+  delivery_fee?: number | null;
   item_breakdown: unknown[];
   status: QuoteStatus;
   created_at: string;
@@ -646,6 +667,24 @@ export interface DeliveryAddress {
 
 export type EditableAddress = Omit<DeliveryAddress, 'id' | 'profile_id' | 'created_at' | 'updated_at'>;
 
+/**
+ * Where a booklist is to be delivered (book_request_delivery,
+ * bookshops_booklist_delivery.sql). A snapshot of the address at the time
+ * the list was sent, so shops price delivery to a fixed destination.
+ */
+export interface RequestDelivery {
+  request_id: string;
+  address_id: string | null;
+  is_alternate: boolean;
+  recipient_name: string | null;
+  phone: string | null;
+  address: string;
+  city: string;
+  state: string | null;
+  landmark: string | null;
+  notes: string | null;
+}
+
 export type NotificationKind =
   | 'quote_received'
   | 'quote_updated'
@@ -655,7 +694,13 @@ export type NotificationKind =
   | 'order_dispatched'
   | 'order_delivered'
   | 'order_cancelled'
-  | 'escrow_released';
+  | 'escrow_released'
+  // Vendor alerts — bookshops_vendor_alerts.sql
+  | 'request_received'
+  | 'order_placed'
+  | 'quote_declined'
+  | 'buyer_message'
+  | 'payment_released';
 
 /** One in-app alert. Written by database triggers, never by the client. */
 export interface AppNotification {

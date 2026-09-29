@@ -28,7 +28,7 @@ import { AdminProfileMenu } from '../admin/AdminProfileMenu';
 import { ShellProvider } from './ShellContext';
 import { useVendorIdentity } from '../../hooks/useVendorIdentity';
 import { useAdminAlerts } from '../../hooks/useAdminAlerts';
-import { useVendorBadges } from '../../hooks/useVendorBadges';
+import { useVendorAlerts } from '../../hooks/useVendorAlerts';
 import { useProfileIdentity } from '../../hooks/useProfileIdentity';
 import { supabase } from '../../utils/supabase';
 import { useBuyerAlerts } from '../../hooks/useBuyerAlerts';
@@ -36,6 +36,7 @@ import { useGlobalSearch, type SearchHit } from '../../hooks/useGlobalSearch';
 import { SearchDropdown } from '../dashboard/SearchDropdown';
 import { NotificationsPanel } from '../dashboard/NotificationsPanel';
 import type { AppNotification } from '../../types/db';
+import { PendingBooklistResumer } from '../booklists/PendingBooklistResumer';
 import { colors } from '../../theme';
 
 export type ShellRole = 'buyer' | 'vendor' | 'admin';
@@ -113,7 +114,7 @@ export function AppShell({ role, children }: { role: ShellRole; children: ReactN
   const { vendor, setBusyMode } = useVendorIdentity(role === 'vendor');
   const { name: displayName, refresh: refreshProfile } = useProfileIdentity();
   const alerts = useAdminAlerts(role === 'admin');
-  const vendorBadges = useVendorBadges(role === 'vendor', pathname);
+  const vendorAlerts = useVendorAlerts(role === 'vendor', pathname);
   const buyerAlerts = useBuyerAlerts(role === 'buyer', pathname);
 
   // ---- header search -------------------------------------------
@@ -166,7 +167,7 @@ export function AppShell({ role, children }: { role: ShellRole; children: ReactN
 
   function openNotification(n: AppNotification) {
     setNotificationsOpen(false);
-    if (!n.read_at) void buyerAlerts.markRead([n.id]);
+    if (!n.read_at) void (role === 'vendor' ? vendorAlerts : buyerAlerts).markRead([n.id]);
     // The database CHECK keeps link relative, so this cannot leave the app.
     if (n.link && n.link.startsWith('/')) router.push(n.link as any);
   }
@@ -264,6 +265,12 @@ export function AppShell({ role, children }: { role: ShellRole; children: ReactN
         onBusyModeChange={setBusyMode}
         onMenuPress={() => setDrawerOpen(true)}
         onProfilePress={openProfile}
+        onBellPress={() => {
+          setNotificationsOpen(true);
+          void vendorAlerts.refresh();
+        }}
+        unreadAlerts={vendorAlerts.unread}
+        menuBadge={vendorAlerts.unreadMessages > 0 || vendorAlerts.ordersToPack > 0}
       />
     ) : role === 'admin' ? (
       <AdminTopBar
@@ -281,6 +288,7 @@ export function AppShell({ role, children }: { role: ShellRole; children: ReactN
         query={search}
         onQueryChange={setSearch}
         onMenuPress={() => setDrawerOpen(true)}
+        menuBadge={buyerAlerts.unreadMessages > 0}
         onProfilePress={openProfile}
         onSupportPress={() => setSupportOpen(true)}
         // Home is the buyer dashboard. replace-less push keeps Back
@@ -328,7 +336,7 @@ export function AppShell({ role, children }: { role: ShellRole; children: ReactN
     role === 'vendor' ? (
       <VendorSidebar
         activeKey={activeKey}
-        badges={vendorBadges}
+        badges={vendorAlerts.badges}
         onNavigate={navigateVendor}
         drawerOpen={drawerOpen}
         onCloseDrawer={() => setDrawerOpen(false)}
@@ -381,6 +389,20 @@ export function AppShell({ role, children }: { role: ShellRole; children: ReactN
         {topBar}
         {accountMenu}
 
+        {role === 'vendor' && (
+          <NotificationsPanel
+            audience="vendor"
+            visible={notificationsOpen}
+            items={vendorAlerts.items}
+            unread={vendorAlerts.unread}
+            loading={vendorAlerts.loading}
+            migrationMissing={vendorAlerts.migration === 'missing'}
+            onClose={() => setNotificationsOpen(false)}
+            onOpen={openNotification}
+            onMarkAllRead={vendorAlerts.markAllRead}
+          />
+        )}
+
         {/* Support is a buyer affordance; vendors and admins reach the
             same team through their own account menus. */}
         {role === 'buyer' && (
@@ -427,6 +449,10 @@ export function AppShell({ role, children }: { role: ShellRole; children: ReactN
           // takes the guest where they were trying to go.
           onAuthenticated={gate.onAuthenticated}
         />
+
+        {/* A booklist a guest pressed "Sign in to Send" on, sent once they
+            are back signed in after leaving the page to sign up. */}
+        <PendingBooklistResumer />
       </SafeAreaView>
     </ShellProvider>
   );

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '../utils/supabase';
 import { SETTLED_PAYMENT_STATUSES } from '../types/db';
+import { loadIdentity, type VendorIdentity } from '../lib/vendorKyc';
 
 export interface VendorBank {
   bank_name: string;
@@ -35,12 +36,25 @@ export function useVendorDetail(vendorId: string | null) {
   const [error, setError] = useState<Error | null>(null);
   /** vendor_bank_accounts only exists after bookshops_payouts.sql. */
   const [bankTableMissing, setBankTableMissing] = useState(false);
+  /** The owner's submitted ID (bookshops_vendor_identity.sql). Admin-readable only. */
+  const [identity, setIdentity] = useState<VendorIdentity | null>(null);
+  const [identityMissing, setIdentityMissing] = useState(false);
 
   const load = useCallback(async () => {
     if (!vendorId) return;
     setLoading(true);
     setError(null);
     setBankTableMissing(false);
+    setIdentityMissing(false);
+
+    // Separate from the batch below: an identity table that does not
+    // exist yet must not cost the admin the bank and performance panels.
+    loadIdentity(vendorId)
+      .then(setIdentity)
+      .catch((e: { code?: string }) => {
+        setIdentity(null);
+        if (['42P01', 'PGRST205'].includes(e?.code ?? '')) setIdentityMissing(true);
+      });
 
     const [bankRes, orderRes] = await Promise.all([
       supabase
@@ -94,6 +108,7 @@ export function useVendorDetail(vendorId: string | null) {
     if (!vendorId) {
       setBank(null);
       setPerformance(null);
+      setIdentity(null);
       setError(null);
       return;
     }
@@ -103,5 +118,5 @@ export function useVendorDetail(vendorId: string | null) {
     });
   }, [vendorId, load]);
 
-  return { bank, performance, loading, error, bankTableMissing, refresh: load };
+  return { bank, performance, identity, identityMissing, loading, error, bankTableMissing, refresh: load };
 }

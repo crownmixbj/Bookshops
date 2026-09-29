@@ -12,7 +12,7 @@ import {
   StyleSheet,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams, usePathname } from 'expo-router';
 
 import {
   VendorGate,
@@ -60,7 +60,10 @@ export default function VendorMessagesScreen() {
   const params = useLocalSearchParams<{ quote?: string }>();
   const initial = typeof params.quote === 'string' ? params.quote : null;
 
-  const inbox = useVendorMessages(initial);
+  // The Stack keeps this screen mounted after the shop moves on; it may
+  // only mark messages read while it is the screen actually showing.
+  const pathname = usePathname();
+  const inbox = useVendorMessages(initial, pathname === '/vendor/messages');
   const { threads, loading, error, migration, refresh, activeId, active, open, unreadTotal } = inbox;
 
   const [filter, setFilter] = useState<Filter>('all');

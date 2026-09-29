@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { View, Text, Pressable, ScrollView, Linking, Modal, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, radius, font, shadow, formatNaira } from '../../theme';
@@ -6,6 +7,7 @@ import { useVendorDetail } from '../../hooks/useVendorDetail';
 import { Skeleton } from '../vendor/PayoutParts';
 import { formatNuban } from '../../hooks/useAdminFinance';
 import type { AdminVendorRow } from '../../hooks/useAdminVendors';
+import { IdentityReview } from './IdentityReview';
 
 interface Props {
   vendor: AdminVendorRow | null;
@@ -13,6 +15,10 @@ interface Props {
   onApprove: (row: AdminVendorRow) => void;
   onSuspend: (row: AdminVendorRow) => void;
   onRestore: (row: AdminVendorRow) => void;
+  /** Verify or reject the owner's ID. */
+  onReviewIdentity?: (row: AdminVendorRow, verify: boolean, note: string | null) => Promise<{ ok: boolean; message?: string }>;
+  /** Mark the payout account as checked (or not). */
+  onConfirmBank?: (row: AdminVendorRow, confirmed: boolean) => Promise<{ ok: boolean; message?: string }>;
   busy: boolean;
 }
 
@@ -52,9 +58,21 @@ function openUrl(url: string) {
  * ask anyone for this". Guessing which is which is how a verification
  * step gets skipped.
  */
-export function VendorDetailDrawer({ vendor, onClose, onApprove, onSuspend, onRestore, busy }: Props) {
+export function VendorDetailDrawer({
+  vendor,
+  onClose,
+  onApprove,
+  onSuspend,
+  onRestore,
+  onReviewIdentity,
+  onConfirmBank,
+  busy,
+}: Props) {
   const { isMobile, width } = useLayout();
-  const { bank, performance, loading, error, bankTableMissing } = useVendorDetail(vendor?.id ?? null);
+  const { bank, performance, identity, identityMissing, loading, error, bankTableMissing, refresh } =
+    useVendorDetail(vendor?.id ?? null);
+  const [bankBusy, setBankBusy] = useState(false);
+  const [bankError, setBankError] = useState<string | null>(null);
 
   if (!vendor) return null;
 
@@ -130,6 +148,26 @@ export function VendorDetailDrawer({ vendor, onClose, onApprove, onSuspend, onRe
               <Row label="Shop email" value={vendor.email} />
             </Section>
 
+            {/* Before the bank details: whether we know who this is
+                decides whether the bank account can be trusted. */}
+            <Section title="Identity">
+              {loading && !identity ? (
+                <Skeleton width="70%" height={14} />
+              ) : (
+                <IdentityReview
+                  identity={identity}
+                  missing={identityMissing}
+                  accountName={bank?.account_name ?? null}
+                  onReview={async (verify, note) => {
+                    if (!onReviewIdentity) return { ok: false, message: 'Not available here.' };
+                    const r = await onReviewIdentity(vendor, verify, note);
+                    if (r.ok) await refresh();
+                    return r;
+                  }}
+                />
+              )}
+            </Section>
+
             <Section title="Payout Account">
               {loading ? (
                 <>
@@ -151,6 +189,31 @@ export function VendorDetailDrawer({ vendor, onClose, onApprove, onSuspend, onRe
                       ? 'Name confirmed against the bank.'
                       : 'Not confirmed against the bank — check the digits before paying out.'}
                   </Text>
+                  {!!onConfirmBank && (
+                    <Pressable
+                      onPress={async () => {
+                        setBankBusy(true);
+                        setBankError(null);
+                        const r = await onConfirmBank(vendor, !bank.verified_at);
+                        setBankBusy(false);
+                        if (r.ok) await refresh();
+                        else setBankError(r.message ?? 'That did not work.');
+                      }}
+                      disabled={bankBusy}
+                      style={({ pressed }) => [styles.bankBtn, pressed && styles.pressed]}
+                      accessibilityRole="button"
+                    >
+                      <Ionicons
+                        name={bank.verified_at ? 'close-circle-outline' : 'checkmark-circle-outline'}
+                        size={15}
+                        color={bank.verified_at ? colors.textMuted : colors.success}
+                      />
+                      <Text style={[styles.bankBtnText, !bank.verified_at && { color: colors.success }]}>
+                        {bankBusy ? 'Saving…' : bank.verified_at ? 'Mark as unchecked' : 'Mark account as checked'}
+                      </Text>
+                    </Pressable>
+                  )}
+                  {!!bankError && <Text style={styles.warnNote}>{bankError}</Text>}
                 </>
               ) : (
                 <Text style={styles.note}>
@@ -312,6 +375,8 @@ const styles = StyleSheet.create({
 
   note: { fontSize: font.sm, color: colors.textMuted, lineHeight: 19 },
   okNote: { fontSize: font.xs, color: colors.success, marginTop: 2 },
+  bankBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', paddingVertical: spacing.xs },
+  bankBtnText: { fontSize: font.sm, fontWeight: '700', color: colors.textMuted },
   warnNote: { fontSize: font.xs, color: colors.warning, marginTop: 2, lineHeight: 16 },
 
   stats: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },

@@ -22,6 +22,8 @@ import {
 } from '../../components/settings/SettingsControls';
 import { ChildrenSection } from '../../components/household/ChildrenSection';
 import { AddressBookSection } from '../../components/household/AddressBookSection';
+import { PayoutAccountSection } from '../../components/settings/PayoutAccountSection';
+import { IdentitySection } from '../../components/settings/IdentitySection';
 
 import { useLayout } from '../../hooks/useLayout';
 import { useSettings, type SaveState } from '../../hooks/useSettings';
@@ -42,6 +44,17 @@ export default function SettingsScreen() {
   const scrollRef = useRef<ScrollView>(null);
   const profileY = useRef(0);
   const [highlightProfile, setHighlightProfile] = useState(false);
+  // The Identity card's offset inside the left column. The column's own
+  // offset is profileY (the column is what reports it), so the card's
+  // position in the page is the sum of the two.
+  const identityY = useRef(0);
+  const [highlightIdentity, setHighlightIdentity] = useState(false);
+
+  function goToIdentity() {
+    scrollRef.current?.scrollTo({ y: Math.max(profileY.current + identityY.current - 12, 0), animated: true });
+    setHighlightIdentity(true);
+    setTimeout(() => setHighlightIdentity(false), 2600);
+  }
 
   const {
     profile,
@@ -85,6 +98,13 @@ export default function SettingsScreen() {
    * Waits for `loading` to clear: before that the sections are not laid
    * out, so profileY is still 0 and the scroll would do nothing.
    */
+  // ?section=identity — e.g. a "verify your shop" prompt elsewhere.
+  useEffect(() => {
+    if (section !== 'identity' || loading) return;
+    const t = setTimeout(goToIdentity, 150);
+    return () => clearTimeout(t);
+  }, [section, loading]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     if (section !== 'profile' || loading) return;
     const scrollTimer = setTimeout(() => {
@@ -318,9 +338,45 @@ export default function SettingsScreen() {
                           ? { label: 'Verified', tone: 'success' }
                           : { label: 'Pending', tone: 'warning' }
                       }
-                      note="An administrator verifies your identity and address."
+                      note="Set by LOCI once your ID has been checked."
                     />
+                    {!vendor?.verified_at && (
+                      <Pressable
+                        onPress={goToIdentity}
+                        style={({ pressed }) => [styles.verifyLink, pressed && styles.pressed]}
+                        accessibilityRole="link"
+                        accessibilityLabel="Verify your identity"
+                      >
+                        <Ionicons name="shield-checkmark-outline" size={15} color={colors.navy} />
+                        <Text style={styles.verifyLinkText}>Verify your identity</Text>
+                        <Ionicons name="arrow-down" size={14} color={colors.navy} />
+                      </Pressable>
+                    )}
                   </Section>
+                )}
+
+                {/* ---- identity, then payouts ----------------------
+                    Identity sits directly under Shop Details because it
+                    is what the Verification row above depends on. Both
+                    are their own cards with their own Save buttons: they
+                    ask for your password and go to private tables, so
+                    they are not saved along with the public shop card. */}
+                {/* Shown to every vendor, shop saved or not. A brand-new
+                    vendor has no shop row yet, and hiding these until one
+                    exists made them look missing; instead each card says
+                    to save Shop Details first, and unlocks the moment it
+                    is saved (updateVendor reloads the shop). */}
+                {isVendor && (
+                  <>
+                    <View
+                      onLayout={(e) => {
+                        identityY.current = e.nativeEvent.layout.y;
+                      }}
+                    >
+                      <IdentitySection vendorId={vendor?.id ?? null} highlight={highlightIdentity} />
+                    </View>
+                    <PayoutAccountSection vendorId={vendor?.id ?? null} />
+                  </>
                 )}
               </View>
 
@@ -520,4 +576,12 @@ const styles = StyleSheet.create({
   },
   errorText: { flex: 1, fontSize: font.sm, color: colors.danger, lineHeight: 18 },
   pressed: { opacity: 0.85 },
+  verifyLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'flex-start',
+    paddingVertical: spacing.xs,
+  },
+  verifyLinkText: { fontSize: font.sm, fontWeight: '700', color: colors.navy },
 });

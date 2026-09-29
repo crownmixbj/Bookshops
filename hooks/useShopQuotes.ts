@@ -143,7 +143,7 @@ export function useShopQuotes(vendorId: string | null): UseShopQuotes {
         const { data, error: quotesError } = await withTimeout(
           supabase
             .from('quotes')
-            .select('id, request_id, status, total_price, created_at, quote_items(count)')
+            .select('*, quote_items(count)')
             .eq('vendor_id', vendorId)
             .in('request_id', requestIds),
           8000,
@@ -179,7 +179,11 @@ export function useShopQuotes(vendorId: string | null): UseShopQuotes {
           classLevel: (r.class_level as string) || null,
           submittedAt: r.created_at as string,
           status: quote ? STATUS_FROM_QUOTE[quote.status as string] ?? 'received' : 'awaiting',
-          total: quote?.total_price == null ? null : Number(quote.total_price),
+          // Items plus the shop's delivery fee — what the buyer would pay.
+          total:
+            quote?.total_price == null
+              ? null
+              : Number(quote.total_price) + (Number(quote.delivery_fee) || 0),
           quotedItems: Number(quote?.quote_items?.[0]?.count) || 0,
           requestedItems: itemCountOf(r),
         });

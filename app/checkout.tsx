@@ -8,7 +8,8 @@ import { FormField } from '../components/auth/FormField';
 import { StatePicker } from '../components/settings/StatePicker';
 import { AddressPicker } from '../components/household/AddressPicker';
 import { useAddressBook } from '../hooks/useAddressBook';
-import type { DeliveryAddress } from '../types/db';
+import { loadRequestDelivery } from '../lib/requestDelivery';
+import type { DeliveryAddress, RequestDelivery } from '../types/db';
 import { useLayout } from '../hooks/useLayout';
 import { supabase } from '../utils/supabase';
 import {
@@ -117,9 +118,12 @@ export default function CheckoutScreen() {
   const [addressId, setAddressId] = useState<string | null>(null);
   const [saveAddress, setSaveAddress] = useState(true);
   const addressPrefilled = useRef(false);
+  /** Area of the address the booklist was sent with, when checkout used it. */
+  const [fromBooklist, setFromBooklist] = useState<string | null>(null);
 
   const applyAddress = useCallback((a: DeliveryAddress) => {
     setAddressId(a.id);
+    setFromBooklist(null);
     setErrors({});
     setForm((f) => ({
       name: a.recipient_name,
@@ -130,6 +134,27 @@ export default function CheckoutScreen() {
       // The landmark is how a rider finds the gate; the order has no
       // column of its own for it, so it travels in the notes.
       notes: a.landmark ? `Landmark: ${a.landmark}` : f.notes && f.notes.startsWith('Landmark:') ? '' : f.notes,
+    }));
+  }, []);
+
+  /**
+   * The address the booklist was sent with — the one the shop priced its
+   * delivery fee to — outranks the default. Shown with a note, and still
+   * editable: a buyer may genuinely need to change it, and then knows the
+   * fee was quoted for somewhere else.
+   */
+  const applyRequestDelivery = useCallback((d: RequestDelivery) => {
+    addressPrefilled.current = true;
+    setAddressId(d.address_id);
+    setErrors({});
+    setFromBooklist([d.city, d.state].filter(Boolean).join(', '));
+    setForm((f) => ({
+      name: d.recipient_name || f.name,
+      phone: d.phone || f.phone,
+      address: d.address,
+      city: d.city,
+      state: d.state ?? '',
+      notes: [d.landmark ? `Landmark: ${d.landmark}` : '', d.notes ?? ''].filter(Boolean).join(' — '),
     }));
   }, []);
 
@@ -228,6 +253,9 @@ export default function CheckoutScreen() {
       setTestAllowed(settings);
       setForm((current) => (current === EMPTY_FORM ? profile : current));
 
+      const sentTo = await loadRequestDelivery(next.request_id);
+      if (sentTo) applyRequestDelivery(sentTo);
+
       if (next.existing_order_id && next.existing_payment_status !== 'pending') {
         setProblem('This quote has already been paid for.');
         setPhase('unavailable');
@@ -241,7 +269,7 @@ export default function CheckoutScreen() {
     }
     // bundleIds is derived from bundleParam, which is the real dependency.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [quoteId, bundleParam, returnedReference, settle]);
+  }, [quoteId, bundleParam, returnedReference, settle, applyRequestDelivery]);
 
   useEffect(() => {
     load();
@@ -491,6 +519,16 @@ export default function CheckoutScreen() {
         {/* ---------------- Delivery ---------------- */}
         <View style={[styles.column, !isMobile && styles.columnWide]}>
           <Panel title="Delivery Information">
+            {!!fromBooklist && (
+              <View style={styles.fromBooklist}>
+                <Ionicons name="information-circle" size={15} color={colors.navy} />
+                <Text style={styles.fromBooklistText}>
+                  Filled in with the address you sent with this booklist ({fromBooklist}). The
+                  shop's delivery fee was priced to it — if you change it, check with the shop
+                  first.
+                </Text>
+              </View>
+            )}
             <AddressPicker
               addresses={book.addresses}
               selectedId={addressId}
@@ -498,6 +536,7 @@ export default function CheckoutScreen() {
               onSelect={applyAddress}
               onNew={() => {
                 setAddressId(null);
+                setFromBooklist(null);
                 setForm((f) => ({ ...EMPTY_FORM, name: f.name, phone: f.phone }));
               }}
             />
@@ -873,4 +912,14 @@ const styles = StyleSheet.create({
   },
   secondaryPressed: { backgroundColor: colors.surfaceMuted },
   secondaryText: { fontSize: font.md, fontWeight: '700', color: colors.navy },
+  fromBooklist: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    backgroundColor: '#E8EEF8',
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  fromBooklistText: { flex: 1, fontSize: font.sm, color: colors.navy, lineHeight: 18 },
 });

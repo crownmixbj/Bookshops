@@ -105,7 +105,19 @@ export function VendorTopBar({
   onBusyModeChange,
   onMenuPress,
   onProfilePress,
+  onBellPress,
+  unreadAlerts = 0,
+  menuBadge = false,
 }: {
+  /** Opens the alerts panel. */
+  onBellPress?: () => void;
+  /** Unread alerts — the count on the bell. */
+  unreadAlerts?: number;
+  /**
+   * A dot on the hamburger (phones only, where the sidebar is a drawer)
+   * when something inside it has a badge — the same cue the buyer gets.
+   */
+  menuBadge?: boolean;
   storeName: string;
   query: string;
   onQueryChange: (v: string) => void;
@@ -121,8 +133,13 @@ export function VendorTopBar({
       <View style={styles.bar}>
         <View style={[styles.brand, !isMobile && styles.brandWide]}>
           {isMobile ? (
-            <Pressable onPress={onMenuPress} hitSlop={8} accessibilityLabel="Open menu">
+            <Pressable
+              onPress={onMenuPress}
+              hitSlop={8}
+              accessibilityLabel={menuBadge ? 'Open menu, new orders or messages' : 'Open menu'}
+            >
               <Ionicons name="menu" size={22} color={colors.onNavy} />
+              {menuBadge && <View style={styles.menuDot} />}
             </Pressable>
           ) : (
             <Text style={styles.brandText}>LOCI</Text>
@@ -164,8 +181,19 @@ export function VendorTopBar({
             <Ionicons name="chevron-down" size={14} color={colors.onNavy} />
           </Pressable>
 
-          <Pressable style={styles.bell} accessibilityRole="button" accessibilityLabel="Notifications">
+          <Pressable
+            onPress={onBellPress}
+            style={styles.bell}
+            hitSlop={6}
+            accessibilityRole="button"
+            accessibilityLabel={unreadAlerts > 0 ? `Alerts, ${unreadAlerts} unread` : 'Alerts'}
+          >
             <Ionicons name="notifications-outline" size={20} color={colors.onNavy} />
+            {unreadAlerts > 0 && (
+              <View style={styles.bellBadge}>
+                <Text style={styles.bellBadgeText}>{unreadAlerts > 9 ? '9+' : unreadAlerts}</Text>
+              </View>
+            )}
           </Pressable>
         </View>
       </View>
@@ -339,6 +367,34 @@ const styles = StyleSheet.create({
   vendorLabel: { color: 'rgba(255,255,255,0.65)', fontSize: 9, fontWeight: '700', letterSpacing: 0.5 },
   vendorName: { color: colors.onNavy, fontSize: font.sm, fontWeight: '700', maxWidth: 140 },
   bell: { padding: spacing.sm },
+  // The buyer bell's badge, with the ring in navy so it reads as cut out
+  // of this darker bar rather than floating on a white halo.
+  bellBadge: {
+    position: 'absolute',
+    top: 2,
+    right: 0,
+    minWidth: 17,
+    height: 17,
+    borderRadius: 9,
+    paddingHorizontal: 4,
+    backgroundColor: colors.orange,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: colors.navy,
+  },
+  bellBadgeText: { color: colors.onNavy, fontSize: 9, fontWeight: '800' },
+  menuDot: {
+    position: 'absolute',
+    top: -2,
+    right: -4,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: colors.onNavy,
+    borderWidth: 2,
+    borderColor: colors.orange,
+  },
 
   busyStrip: {
     flexDirection: 'row',

@@ -53,6 +53,8 @@ export function useLumpSumQuote({
   const [quoteId, setQuoteId] = useState<string | null>(initialQuoteId);
   const [status, setStatus] = useState<QuoteStatus | null>(null);
   const [totalText, setTotalText] = useState('');
+  /** The shop's delivery charge, kept separate from the books total. */
+  const [deliveryText, setDeliveryText] = useState('');
   const [note, setNote] = useState('');
   const [pages, setPagesState] = useState<Page[]>([]);
   /** Uploaded files the vendor removed; deleted from storage after a save. */
@@ -90,6 +92,7 @@ export function useLumpSumQuote({
     if (!initialQuoteId) {
       setStatus(null);
       setTotalText('');
+      setDeliveryText('');
       setNote('');
       setLoading(false);
       return;
@@ -99,7 +102,7 @@ export function useLumpSumQuote({
     (async () => {
       const { data, error: e } = await supabase
         .from('quotes')
-        .select('status, pricing_mode, total_price, vendor_note, response_files')
+        .select('status, pricing_mode, total_price, delivery_fee, vendor_note, response_files')
         .eq('id', initialQuoteId)
         .maybeSingle();
       if (cancelled) return;
@@ -108,6 +111,8 @@ export function useLumpSumQuote({
         setStatus(data.status as QuoteStatus);
         const total = Number(data.total_price) || 0;
         setTotalText(data.pricing_mode === 'lump_sum' && total > 0 ? String(total) : '');
+        const fee = (data as { delivery_fee?: number | null }).delivery_fee;
+        setDeliveryText(fee == null ? '' : String(Number(fee)));
         setNote(data.vendor_note ?? '');
         setPages(
           parseResponseFiles(data.response_files).map((file) => ({
@@ -125,11 +130,14 @@ export function useLumpSumQuote({
   }, [initialQuoteId, requestId, setPages]);
 
   const total = parseTotal(totalText);
+  /** Null until typed; 0 is free delivery. */
+  const deliveryFee = parseTotal(deliveryText);
   // Accepted: the customer is paying for exactly this. Rejected: the
   // customer said no, and that offer is closed for good.
   const locked = status === 'accepted' || status === 'rejected';
   const busy = saving || preparing > 0;
-  const canSend = !locked && !busy && total != null && total > 0 && pages.length > 0;
+  const canSend =
+    !locked && !busy && total != null && total > 0 && deliveryFee != null && pages.length > 0;
   const roomLeft = MAX_RESPONSE_FILES - pages.length;
 
   /**
@@ -226,6 +234,10 @@ export function useLumpSumQuote({
           setError('Attach your priced sheet (photos or a PDF) so the customer can check the total.');
           return false;
         }
+        if (deliveryFee == null) {
+          setError('Enter your delivery cost before sending — put 0 if delivery is free.');
+          return false;
+        }
       }
       const trimmedNote = note.trim();
       if (trimmedNote.length > NOTE_MAX) {
@@ -251,6 +263,7 @@ export function useLumpSumQuote({
               status: 'draft',
               pricing_mode: 'lump_sum',
               total_price: total ?? 0,
+              delivery_fee: deliveryFee,
               item_breakdown: [],
             })
             .select('id')
@@ -279,6 +292,7 @@ export function useLumpSumQuote({
           .update({
             pricing_mode: 'lump_sum',
             total_price: total ?? 0,
+            delivery_fee: deliveryFee,
             vendor_note: trimmedNote || null,
             response_files: finalFiles,
             status: target,
@@ -304,7 +318,7 @@ export function useLumpSumQuote({
         setSaving(false);
       }
     },
-    [vendorId, locked, status, preparing, total, pages, note, quoteId, requestId, setPages]
+    [vendorId, locked, status, preparing, total, deliveryFee, pages, note, quoteId, requestId, setPages]
   );
 
   return {
@@ -320,6 +334,9 @@ export function useLumpSumQuote({
     totalText,
     setTotalText,
     total,
+    deliveryText,
+    setDeliveryText,
+    deliveryFee,
     note,
     setNote,
     pages,
